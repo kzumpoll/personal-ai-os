@@ -184,6 +184,7 @@ export interface SaveDebriefIntent {
     wins?: string[];
     task_completions?: string[]; // task ids to mark done
     task_due_date_changes?: Array<{ id: string; due_date: string }>;
+    task_deletions?: string[]; // task ids to permanently delete
   };
 }
 

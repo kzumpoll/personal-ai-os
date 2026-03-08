@@ -530,7 +530,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'save_debrief': {
-      const { entry_date, debrief_date, wake_time, work_start, mit, k1, k2, open_journal, wins, task_completions, task_due_date_changes } =
+      const { entry_date, debrief_date, wake_time, work_start, mit, k1, k2, open_journal, wins, task_completions, task_due_date_changes, task_deletions } =
         intent.data;
       // entry_date = planDate (MIT/K1/K2), debrief_date = day being debriefed (journal/wins)
       const journalDate = debrief_date ?? entry_date;
@@ -611,6 +611,30 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         }
       }
 
+      if (task_deletions?.length) {
+        for (const id of task_deletions) {
+          console.log('[save_debrief] deleting task id:', id, '| valid UUID:', isValidUUID(id));
+          if (!isValidUUID(id)) {
+            console.warn('[save_debrief] skipping invalid task ID for deletion:', id);
+            messages.push(`Could not delete task — "${id}" is not a valid task ID.`);
+            continue;
+          }
+          const task = await getTaskById(id);
+          if (task) {
+            await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+            await logMutation({
+              action: 'delete',
+              table_name: 'tasks',
+              record_id: id,
+              before_data: task as unknown as Record<string, unknown>,
+            });
+            messages.push(`Deleted: "${task.title}"`);
+          } else {
+            messages.push(`Task not found for deletion: ${id.slice(0, 8)}…`);
+          }
+        }
+      }
+
       if (wins?.length) {
         for (const w of wins) {
           const win = await createWin({ content: w, entry_date: journalDate });
@@ -630,6 +654,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         const handledIds = new Set<string>([
           ...(task_completions ?? []),
           ...(task_due_date_changes?.map((c) => c.id) ?? []),
+          ...(task_deletions ?? []),
         ]);
         const { rows: overdueRows } = await pool.query(
           `SELECT id, title FROM tasks WHERE status = 'todo' AND due_date < $1`,

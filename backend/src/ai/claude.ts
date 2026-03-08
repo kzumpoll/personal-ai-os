@@ -405,6 +405,168 @@ export async function classifyAndRespond(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Debrief response parser — exported for testing
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the first balanced {...} JSON block from a string.
+ * Handles nested objects and string literals with escape sequences.
+ */
+export function extractFirstJsonBlock(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\' && inString) { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    if (ch === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+/**
+ * Scan text for a JSON block that has "intent": "save_debrief".
+ * Used as a last-resort extraction when the block is embedded in prose.
+ */
+function findEmbeddedSaveDebrief(text: string): string | null {
+  const marker = 'save_debrief';
+  let searchFrom = 0;
+  while (searchFrom < text.length) {
+    const idx = text.indexOf(marker, searchFrom);
+    if (idx === -1) break;
+    // Walk back to the nearest { before this occurrence
+    const lastBrace = text.lastIndexOf('{', idx);
+    if (lastBrace !== -1) {
+      const block = extractFirstJsonBlock(text.slice(lastBrace));
+      if (block) {
+        try {
+          const parsed = JSON.parse(block) as Record<string, unknown>;
+          if (parsed.intent === 'save_debrief') return block;
+        } catch { /* continue */ }
+      }
+    }
+    searchFrom = idx + 1;
+  }
+  return null;
+}
+
+/**
+ * Given a parsed JSON object, try to extract a valid save_debrief intent from it.
+ * Handles:
+ *   - Direct { intent: "save_debrief", data: {...} }
+ *   - { intent: "unknown", data: { message: "...embedded save_debrief JSON..." } }
+ */
+function extractSaveDebrief(parsed: Record<string, unknown>): Intent | null {
+  if (parsed.intent === 'save_debrief' && parsed.data && typeof parsed.data === 'object') {
+    return parsed as unknown as Intent;
+  }
+  if (parsed.intent === 'unknown' && parsed.data && typeof parsed.data === 'object') {
+    const msg = (parsed.data as Record<string, unknown>).message;
+    if (typeof msg === 'string') {
+      try {
+        const inner = JSON.parse(msg.trim()) as Record<string, unknown>;
+        if (inner.intent === 'save_debrief') return inner as unknown as Intent;
+      } catch { /* try block extraction */ }
+      const block = extractFirstJsonBlock(msg);
+      if (block) {
+        try {
+          const inner = JSON.parse(block) as Record<string, unknown>;
+          if (inner.intent === 'save_debrief') return inner as unknown as Intent;
+        } catch { /* try embedded scan */ }
+      }
+      const embedded = findEmbeddedSaveDebrief(msg);
+      if (embedded) {
+        try {
+          const inner = JSON.parse(embedded) as Record<string, unknown>;
+          if (inner.intent === 'save_debrief') return inner as unknown as Intent;
+        } catch { /* give up */ }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse a raw model output string into a save_debrief Intent.
+ * Tries multiple recovery strategies before giving up.
+ * Returns { intent, repaired: boolean } or null if all strategies fail.
+ *
+ * Strategy order:
+ *   1. Direct JSON.parse → validate save_debrief
+ *   2. Strip markdown fences → parse → validate
+ *   3. Extract first balanced {} block → parse → validate
+ *   4. Scan raw string for embedded save_debrief block
+ */
+export function parseDebriefResponse(raw: string): { intent: Intent; repaired: boolean } | null {
+  const trimmed = raw.trim();
+
+  // Strategy 1: direct parse
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const recovered = extractSaveDebrief(parsed);
+    if (recovered) return { intent: recovered, repaired: false };
+  } catch { /* try next */ }
+
+  // Strategy 2: strip markdown fences
+  const stripped = trimmed
+    .replace(/^```(?:json)?\s*/im, '')
+    .replace(/\s*```\s*$/m, '')
+    .trim();
+  if (stripped !== trimmed) {
+    try {
+      const parsed = JSON.parse(stripped) as Record<string, unknown>;
+      const recovered = extractSaveDebrief(parsed);
+      if (recovered) return { intent: recovered, repaired: true };
+    } catch { /* try next */ }
+  }
+
+  // Strategy 3: extract first balanced JSON block from raw text
+  const block = extractFirstJsonBlock(raw);
+  if (block) {
+    try {
+      const parsed = JSON.parse(block) as Record<string, unknown>;
+      const recovered = extractSaveDebrief(parsed);
+      if (recovered) return { intent: recovered, repaired: true };
+    } catch { /* try next */ }
+  }
+
+  // Strategy 4: scan raw for any embedded save_debrief JSON
+  const embedded = findEmbeddedSaveDebrief(raw);
+  if (embedded) {
+    try {
+      const parsed = JSON.parse(embedded) as Record<string, unknown>;
+      const recovered = extractSaveDebrief(parsed);
+      if (recovered) return { intent: recovered, repaired: true };
+    } catch { /* give up */ }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Debrief system prompt — raw JSON only, no prose, no fences
+// ---------------------------------------------------------------------------
+
+const DEBRIEF_SYSTEM_PROMPT = `You are a debrief data extractor. Your ONLY job is to parse the user's debrief message and return a single JSON object.
+
+CRITICAL OUTPUT RULES — these are absolute and must never be violated:
+- Output RAW JSON only. Nothing else.
+- No markdown code fences. No backticks. No \`\`\`json blocks.
+- No prose, notes, explanations, or commentary before or after the JSON.
+- Do NOT wrap in {"intent":"unknown",...} — if uncertain about a field, omit it.
+- Your entire response must start with { and end with }.
+- Never add a "Notes:" section or any text after the closing brace.`;
+
 export async function interpretDebriefReply(
   userReply: string,
   debriefDate: string,
@@ -414,8 +576,6 @@ export async function interpretDebriefReply(
 ): Promise<Intent> {
   const contextStr = contextPackToString(context);
 
-  // Build a numbered task list with FULL UUIDs so Claude can resolve references correctly.
-  // This is the authoritative list — do NOT use 8-char ID prefixes from contextStr.
   const taskListStr = debriefTasks.length
     ? debriefTasks
         .map((t, i) => `${i + 1}. [${t.id}] ${t.title}${t.due_date ? ` (due: ${t.due_date})` : ''}`)
@@ -424,27 +584,29 @@ export async function interpretDebriefReply(
 
   const prompt = `You are parsing a daily debrief reply. The user is debriefing ${debriefDate} and planning ${planDate}.
 
-IMPORTANT — Task reference list (use FULL UUIDs from this list, never 8-char prefixes):
+Task reference list (use FULL UUIDs from this list, never 8-char prefixes):
 ${taskListStr}
 
-When the user says "move task 5 to tomorrow" or "complete task 3", look up the position in the numbered list above and use its FULL UUID (the value in square brackets).
-
 Extract from their message:
-- wake_time (HH:MM — when they plan to wake up for ${planDate}; convert "7am" → "07:00", "6:30" → "06:30")
-- work_start (HH:MM — when they plan to start work, optional; defaults to wake_time + 1hr if not mentioned)
+- wake_time (HH:MM for ${planDate}; "7am"→"07:00", "6:30"→"06:30")
+- work_start (HH:MM, optional)
 - MIT (Most Important Task for ${planDate})
 - K1, K2 (next 2 priority tasks for ${planDate})
-- open_journal (any reflections, notes, thoughts)
+- open_journal (reflections, notes, thoughts from ${debriefDate})
 - wins (list of wins from ${debriefDate})
-- task_completions (full UUIDs of tasks they marked done — match by position or name from the list above)
-- task_due_date_changes (tasks they want to reschedule — use full UUIDs)
+- task_completions (full UUIDs of tasks marked done — match by position or name)
+- task_due_date_changes (tasks to reschedule — use full UUIDs, new date YYYY-MM-DD)
+- task_deletions (tasks to permanently delete — use full UUIDs; use when user says "delete" next to a task number)
 
-Wake time examples: "wake at 7" → "07:00", "up at 6:30" → "06:30", "wake 7am" → "07:00"
-If no wake time is mentioned, omit wake_time entirely.
+Task action rules:
+- "3. done" or "complete 3" → task_completions
+- "5. to mar 11" or "move 5 to march 11" → task_due_date_changes with date "${planDate.slice(0,4)}-03-11"
+- "9. delete" or "delete 9" → task_deletions (do NOT add notes or ask for clarification — just add to task_deletions)
+- Resolve relative dates using today = ${planDate}
 
-Additional context:\n${contextStr}
+Additional context: ${contextStr}
 
-Respond with JSON intent "save_debrief":
+Return this exact JSON shape (omit fields that are not mentioned; do not include empty arrays):
 {
   "intent": "save_debrief",
   "data": {
@@ -457,29 +619,37 @@ Respond with JSON intent "save_debrief":
     "k2": "...",
     "open_journal": "...",
     "wins": ["...", "..."],
-    "task_completions": ["full-uuid-1", "full-uuid-2"],
-    "task_due_date_changes": [{ "id": "full-uuid", "due_date": "YYYY-MM-DD" }]
+    "task_completions": ["full-uuid-1"],
+    "task_due_date_changes": [{ "id": "full-uuid", "due_date": "YYYY-MM-DD" }],
+    "task_deletions": ["full-uuid-to-delete"]
   }
 }
-
-Omit any field that is not mentioned. Do not include empty arrays.
 
 User reply: ${userReply}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 1024,
+    system: DEBRIEF_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],
   });
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
 
-  try {
-    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    return JSON.parse(cleaned) as Intent;
-  } catch {
+  const result = parseDebriefResponse(text);
+
+  if (!result) {
+    console.error('[interpretDebriefReply] PARSE FAILURE — could not extract save_debrief');
+    console.error('[interpretDebriefReply] raw model output:', JSON.stringify(text));
     return { intent: 'unknown', data: { message: text } };
   }
+
+  if (result.repaired) {
+    console.warn('[interpretDebriefReply] repaired malformed output (recovered save_debrief from wrapper/fences)');
+    console.warn('[interpretDebriefReply] raw (first 300 chars):', text.slice(0, 300));
+  }
+
+  return result.intent;
 }
 
 /** Short month-day formatter — kept inline to avoid importing executor.ts */
@@ -526,10 +696,19 @@ export async function confirmDebriefSummary(
     lines.push(`Reschedule: ${changes.join(', ')}`);
   }
 
+  if (d.task_deletions?.length) {
+    const names = d.task_deletions.map((id) => {
+      const t = debriefTasks.find((t) => t.id === id);
+      return t ? `"${t.title}"` : `(ref: ${String(id).slice(0, 8)}…)`;
+    });
+    lines.push(`Delete: ${names.join(', ')}`);
+  }
+
   // Show which overdue tasks will be auto-moved to the plan date
   const handledIds = new Set<string>([
     ...(d.task_completions ?? []),
     ...(d.task_due_date_changes?.map((c) => c.id) ?? []),
+    ...(d.task_deletions ?? []),
   ]);
   const overdueUnhandled = debriefTasks.filter(
     (t) => t.due_date && t.due_date < (d.entry_date ?? '') && !handledIds.has(t.id)
