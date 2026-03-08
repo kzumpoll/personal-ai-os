@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,300;0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;1,14..32,400&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ── Dark theme (default) ── */
+:root {
+  /* Core palette */
+  --bg:        #060910;
+  --bg-2:      #080c14;
+  --surface:   #0d1220;
+  --surface-2: #111827;
+  --surface-3: #1a2235;
+  --border:    #1e2d42;
+  --border-2:  #253347;
+
+  /* Text */
+  --text:       #e2e8f0;
+  --text-dim:   #94a3b8;
+  --text-muted: #64748b;
+  --text-faint: #334155;
+
+  /* Accents */
+  --blue:   #3b82f6;
+  --cyan:   #06b6d4;
+  --violet: #8b5cf6;
+  --green:  #10b981;
+  --amber:  #f59e0b;
+  --red:    #ef4444;
+
+  /* Semantic */
+  --overdue:  #ef4444;
+  --today:    #f59e0b;
+  --tomorrow: #10b981;
+  --future:   #3b82f6;
+  --done:     #334155;
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --bg:        #f6f6f4;
+  --bg-2:      #efefed;
+  --surface:   #ffffff;
+  --surface-2: #f9f9f7;
+  --surface-3: #f0f0ee;
+  --border:    #e3e3e0;
+  --border-2:  #d4d4d1;
+
+  --text:       #1a1a1a;
+  --text-dim:   #37352f;
+  --text-muted: #787774;
+  --text-faint: #b8b7b4;
+
+  --blue:   #2563eb;
+  --cyan:   #0284c7;
+  --violet: #7c3aed;
+  --green:  #059669;
+  --amber:  #d97706;
+  --red:    #dc2626;
+
+  --overdue:  #dc2626;
+  --today:    #d97706;
+  --tomorrow: #059669;
+  --future:   #2563eb;
+  --done:     #d4d4d1;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.6;
+  height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+a { color: inherit; text-decoration: none; }
+
+/* Mono — only for technical labels, timestamps, IDs */
+.mono {
+  font-family: 'JetBrains Mono', 'Fira Mono', 'Consolas', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* Section labels — mono only for command-center accent labels */
+.section-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--surface);
+}
