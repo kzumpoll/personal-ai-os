@@ -18,8 +18,8 @@ import {
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
 import { getTasksDueOnOrBefore, getTasksForDate } from '../db/queries/tasks';
 import { executeToolCall } from '../tools/weather';
-import { getDayPlanByDate, upsertDayPlan } from '../db/queries/day_plans';
-import { generateDayPlan, formatAgendaForBot } from '../services/dayplan';
+import { getDayPlanByDate, upsertDayPlan, IgnoredEventSnapshot } from '../db/queries/day_plans';
+import { generateDayPlan, formatAgendaForBot, diffDayPlans } from '../services/dayplan';
 import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
 import { getLocalToday, getLocalTomorrow } from '../services/localdate';
@@ -53,19 +53,22 @@ export const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 /**
  * Regenerate (or generate fresh) the day plan for the given date.
  * Pulls journal MIT/K1/K2, calendar events, and tasks from DB.
- * Applies the given wake time override and appends new ignored keywords.
+ * Optionally adds a new ignored event (by exact GCal ID) and its snapshot.
  * Returns the formatted agenda string.
  */
 async function regeneratePlanFor(
   planDate: string,
   overrideWakeTime?: string,
-  addIgnoredKeyword?: string
-): Promise<string> {
+  addIgnoredEvent?: { id: string; title: string; start: string }
+): Promise<{ agenda: string; diff: string | null }> {
   const existing = await getDayPlanByDate(planDate);
   const wakeTime = overrideWakeTime ?? existing?.wake_time ?? null;
 
   if (!wakeTime) {
-    return `No wake time set for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate a plan.`;
+    return {
+      agenda: `No wake time set for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate a plan.`,
+      diff: null,
+    };
   }
 
   const [journal, calendarEvents, tasks] = await Promise.all([
@@ -74,10 +77,17 @@ async function regeneratePlanFor(
     getTasksForDate(planDate, 20),
   ]);
 
-  const ignoredKeywords: string[] = [...(existing?.ignored_event_keywords ?? [])];
-  if (addIgnoredKeyword) {
-    const kw = addIgnoredKeyword.toLowerCase().trim();
-    if (!ignoredKeywords.includes(kw)) ignoredKeywords.push(kw);
+  const ignoredIds: string[] = [...(existing?.ignored_event_ids ?? [])];
+  const ignoredSnapshots: IgnoredEventSnapshot[] = [...(existing?.ignored_event_snapshots ?? [])];
+
+  if (addIgnoredEvent && !ignoredIds.includes(addIgnoredEvent.id)) {
+    ignoredIds.push(addIgnoredEvent.id);
+    ignoredSnapshots.push({
+      id: addIgnoredEvent.id,
+      title: addIgnoredEvent.title,
+      start: addIgnoredEvent.start,
+      removedAt: new Date().toISOString(),
+    });
   }
 
   const focusTitles = new Set([journal?.mit, journal?.k1, journal?.k2].filter(Boolean));
@@ -92,8 +102,12 @@ async function regeneratePlanFor(
     k1: journal?.k1 ?? undefined,
     k2: journal?.k2 ?? undefined,
     otherTasks,
-    ignoredEventKeywords: ignoredKeywords,
+    ignoredEventIds: ignoredIds,
   });
+
+  const diff = existing
+    ? diffDayPlans(existing.schedule, existing.overflow, schedule, overflow, existing.wake_time, wakeTime)
+    : null;
 
   await upsertDayPlan({
     plan_date: planDate,
@@ -101,10 +115,11 @@ async function regeneratePlanFor(
     work_start,
     schedule,
     overflow,
-    ignored_event_keywords: ignoredKeywords,
+    ignored_event_ids: ignoredIds,
+    ignored_event_snapshots: ignoredSnapshots,
   });
 
-  return formatAgendaForBot(schedule, overflow, planDate);
+  return { agenda: formatAgendaForBot(schedule, overflow, planDate), diff };
 }
 
 /** Parse a time string like "7:30", "7am", "730", "07:30" → "07:30" or null */
@@ -139,6 +154,7 @@ function detectDayPlanCommand(lower: string): 'show' | 'wake' | 'remove' | 'rege
 }
 
 async function handleDayPlanCommand(
+  chatId: number,
   lower: string,
   text: string,
   reply: (msg: string) => Promise<unknown>
@@ -177,29 +193,51 @@ async function handleDayPlanCommand(
       return;
     }
     console.log('[bot] day plan: updating wake time to', wakeTime, 'for', planDate);
-    const agenda = await regeneratePlanFor(planDate, wakeTime);
-    await reply(`Wake time updated to ${wakeTime}. Here's your regenerated plan:\n\n${agenda}`);
+    const { agenda, diff } = await regeneratePlanFor(planDate, wakeTime);
+    const changeNote = diff ? `\n\nChanges:\n${diff}` : '';
+    await reply(`Wake time updated to ${wakeTime}. Here's your regenerated plan:\n\n${agenda}${changeNote}`);
     return;
   }
 
   if (cmd === 'remove') {
-    // Extract the keyword to ignore: "remove padel from my plan" → "padel"
+    // Extract the search term: "remove padel from my plan" → "padel"
     const removeMatch = lower.match(/\b(?:remove|ignore|skip|take out|exclude)\s+(.+?)\s+(?:from|event)/);
-    const keyword = removeMatch?.[1]?.trim();
-    if (!keyword) {
+    const searchTerm = removeMatch?.[1]?.trim();
+    if (!searchTerm) {
       await reply('Which event should I remove? e.g. "remove padel from my plan"');
       return;
     }
-    console.log('[bot] day plan: ignoring keyword', keyword, 'for', planDate);
-    const agenda = await regeneratePlanFor(planDate, undefined, keyword);
-    await reply(`"${keyword}" removed from plan. Regenerated:\n\n${agenda}`);
+    const calEvents = await getEventsForDate(planDate);
+    const candidates = calEvents.filter((e) =>
+      e.title.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+    if (candidates.length === 0) {
+      await reply(`No calendar event matching "${searchTerm}" found for ${planDate}. Check your calendar or try a different name.`);
+      return;
+    }
+    if (candidates.length === 1) {
+      const ev = candidates[0];
+      console.log('[bot] day plan: removing event', ev.id, ev.title, 'for', planDate);
+      const { agenda, diff } = await regeneratePlanFor(planDate, undefined, { id: ev.id, title: ev.title, start: ev.start });
+      const changeNote = diff ? `\n\nChanges:\n${diff}` : '';
+      await reply(`"${ev.title}" removed from plan. Regenerated:\n\n${agenda}${changeNote}`);
+      return;
+    }
+    // Multiple matches — ask for clarification
+    const lines = candidates.map((e, i) => {
+      const timeStr = e.allDay ? 'all day' : e.start.slice(11, 16);
+      return `${i + 1}. ${e.title} (${timeStr})`;
+    });
+    setSession(chatId, { state: 'pending_remove_event', planDate, candidates: candidates.map((e) => ({ id: e.id, title: e.title, start: e.start })) });
+    await reply(`Found ${candidates.length} events matching "${searchTerm}":\n${lines.join('\n')}\n\nReply with the number to remove.`);
     return;
   }
 
   if (cmd === 'regen') {
     console.log('[bot] day plan: regenerating for', planDate);
-    const agenda = await regeneratePlanFor(planDate);
-    await reply(`Regenerated plan for ${planDate}:\n\n${agenda}`);
+    const { agenda, diff } = await regeneratePlanFor(planDate);
+    const changeNote = diff ? `\n\nChanges:\n${diff}` : '';
+    await reply(`Regenerated plan for ${planDate}:\n\n${agenda}${changeNote}`);
     return;
   }
 }
@@ -243,6 +281,32 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       // Unrelated message — discard pending capture and handle as fresh message
       clearSession(chatId);
       return await handleText(chatId, text, rawReply);
+    }
+    return;
+  }
+
+  // --- Pending remove event clarification ---
+  if (session.state === 'pending_remove_event') {
+    const { planDate, candidates } = session;
+    if (isNegative(lower) || lower === 'cancel') {
+      clearSession(chatId);
+      await reply('Got it, nothing removed.');
+      return;
+    }
+    const num = extractPositionalNumber(text);
+    if (num !== null && num >= 1 && num <= candidates.length) {
+      const ev = candidates[num - 1];
+      clearSession(chatId);
+      console.log('[bot] day plan: removing event', ev.id, ev.title, 'for', planDate);
+      const { agenda, diff } = await regeneratePlanFor(planDate, undefined, { id: ev.id, title: ev.title, start: ev.start });
+      const changeNote = diff ? `\n\nChanges:\n${diff}` : '';
+      await reply(`"${ev.title}" removed from plan. Regenerated:\n\n${agenda}${changeNote}`);
+    } else {
+      const lines = candidates.map((e, i) => {
+        const timeStr = e.start.length > 10 ? e.start.slice(11, 16) : 'all day';
+        return `${i + 1}. ${e.title} (${timeStr})`;
+      });
+      await reply(`Please reply with a number (1–${candidates.length}):\n${lines.join('\n')}`);
     }
     return;
   }
@@ -342,7 +406,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   // --- Fast path: day plan commands (no Claude API call, no context pack needed) ---
   if (detectDayPlanCommand(lower)) {
     try {
-      await handleDayPlanCommand(lower, text, reply);
+      await handleDayPlanCommand(chatId, lower, text, reply);
     } catch (dpErr) {
       console.error('[bot] day plan command error:', dpErr instanceof Error ? dpErr.message : dpErr);
       await reply('Something went wrong with the day plan. Please try again.');
@@ -517,8 +581,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 }
 
 async function startDebrief(chatId: number, reply: (msg: string) => Promise<unknown>) {
-  const now = new Date();
-  const { debriefDate, planDate } = determineDebriefDates(now);
+  const { debriefDate, planDate } = determineDebriefDates();
 
   const tasks = await getTasksDueOnOrBefore(planDate, 30);
 

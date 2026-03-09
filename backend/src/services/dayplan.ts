@@ -71,12 +71,12 @@ export function generateDayPlan(params: {
   k2?: string;
   otherTasks?: string[];      // task titles
   workEnd?: string;           // HH:MM, default 22:30
-  ignoredEventKeywords?: string[];  // lowercase keywords — events matching these are excluded
+  ignoredEventIds?: string[]; // exact Google Calendar event IDs to exclude
 }): { schedule: ScheduleBlock[]; overflow: string[]; work_start: string } {
   const {
     wakeTime, calendarEvents, mit, k1, k2,
     otherTasks = [], workEnd = '22:30',
-    ignoredEventKeywords = [],
+    ignoredEventIds = [],
   } = params;
 
   const wakeMin = parseHHMM(wakeTime);
@@ -89,13 +89,9 @@ export function generateDayPlan(params: {
   // --- Fixed: wake block ---
   schedule.push({ time: toHHMM(wakeMin), title: 'Wake up', type: 'wake', duration_min: 30 });
 
-  // --- Filter out ignored events (matched by keyword against title) ---
-  const ignoredLower = ignoredEventKeywords.map((k) => k.toLowerCase());
-  const filteredEvents = calendarEvents.filter((e) => {
-    if (ignoredLower.length === 0) return true;
-    const titleLower = e.title.toLowerCase();
-    return !ignoredLower.some((keyword) => titleLower.includes(keyword));
-  });
+  // --- Filter out ignored events (matched by exact Google Calendar event ID) ---
+  const ignoredSet = new Set(ignoredEventIds);
+  const filteredEvents = calendarEvents.filter((e) => !ignoredSet.has(e.id));
 
   // --- Calendar events (fixed, sorted) ---
   const sortedEvents = [...filteredEvents]
@@ -122,31 +118,29 @@ export function generateDayPlan(params: {
     taskSlots.push({ title: t, type: 'task', duration_min: 30 });
   }
 
-  // Merge calendar events into occupied intervals
-  // Also add 30-min prep buffer before physical activity events
+  // Step 1: Add ALL calendar events to occupied first (deterministic priority order)
   const occupied: Array<{ start: number; end: number; title: string }> = [];
 
   for (const e of sortedEvents) {
     const eventStart = eventStartMinutes(e);
     const eventEnd = eventStart + eventDurationMinutes(e);
     occupied.push({ start: eventStart, end: eventEnd, title: e.title });
+  }
 
-    // Add prep buffer for physical activity events
-    if (needsPrepBuffer(e.title)) {
-      const bufferStart = eventStart - 30;
-      if (bufferStart >= workStartMin) {
-        occupied.push({ start: bufferStart, end: eventStart, title: `Prep / Leave (${e.title})` });
-        schedule.push({
-          time: toHHMM(bufferStart),
-          title: `Prep / Leave`,
-          type: 'break',
-          duration_min: 30,
-        });
-      }
+  // Step 2: Add prep buffers for physical activity events, only where they don't conflict
+  for (const e of sortedEvents) {
+    if (!needsPrepBuffer(e.title)) continue;
+    const eventStart = eventStartMinutes(e);
+    const bufferStart = eventStart - 30;
+    if (bufferStart < workStartMin) continue;
+    const conflict = occupied.find((o) => bufferStart < o.end && eventStart > o.start && o.title !== e.title);
+    if (!conflict) {
+      occupied.push({ start: bufferStart, end: eventStart, title: `Prep / Leave (${e.title})` });
+      schedule.push({ time: toHHMM(bufferStart), title: `Prep / Leave`, type: 'break', duration_min: 30 });
     }
   }
 
-  // Insert lunch: first free 30-min slot between 12:00 and 15:00
+  // Step 3: Insert lunch — first free 30-min slot between 12:00 and 15:00
   const lunchWindowStart = 12 * 60;
   const lunchWindowEnd = 15 * 60;
   let lunchPlaced = false;
@@ -159,7 +153,7 @@ export function generateDayPlan(params: {
     }
   }
 
-  // Add calendar events to schedule
+  // Step 4: Add calendar events to schedule (display only — already in occupied)
   for (const e of sortedEvents) {
     schedule.push({
       time: toHHMM(eventStartMinutes(e)),
@@ -255,4 +249,57 @@ export function formatAgendaForBot(
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Compare two versions of a day plan and return a human-readable summary of what changed.
+ * Returns null if there are no meaningful differences.
+ */
+export function diffDayPlans(
+  oldSchedule: ScheduleBlock[],
+  oldOverflow: string[],
+  newSchedule: ScheduleBlock[],
+  newOverflow: string[],
+  oldWakeTime: string | null,
+  newWakeTime: string | null
+): string | null {
+  const changes: string[] = [];
+
+  if (oldWakeTime && newWakeTime && oldWakeTime !== newWakeTime) {
+    changes.push(`Wake time: ${oldWakeTime} → ${newWakeTime}`);
+  }
+
+  // Detect blocks that shifted time
+  const oldByTitle = new Map(oldSchedule.map((b) => [b.title, b.time]));
+  const newByTitle = new Map(newSchedule.map((b) => [b.title, b.time]));
+
+  for (const [title, newTime] of newByTitle) {
+    const oldTime = oldByTitle.get(title);
+    if (oldTime && oldTime !== newTime) {
+      changes.push(`${title}: ${oldTime} → ${newTime}`);
+    }
+  }
+
+  // Blocks removed from schedule
+  for (const [title] of oldByTitle) {
+    if (!newByTitle.has(title) && title !== 'Free time') {
+      changes.push(`Removed: ${title}`);
+    }
+  }
+
+  // Blocks added to schedule
+  for (const [title] of newByTitle) {
+    if (!oldByTitle.has(title) && title !== 'Free time') {
+      changes.push(`Added: ${title}`);
+    }
+  }
+
+  // Overflow changes
+  const addedOverflow = newOverflow.filter((t) => !oldOverflow.includes(t));
+  const removedOverflow = oldOverflow.filter((t) => !newOverflow.includes(t));
+  for (const t of addedOverflow) changes.push(`Moved to overflow: ${t}`);
+  for (const t of removedOverflow) changes.push(`Moved from overflow: ${t}`);
+
+  if (changes.length === 0) return null;
+  return changes.join('\n');
 }

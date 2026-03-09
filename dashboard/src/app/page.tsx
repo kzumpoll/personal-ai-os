@@ -75,7 +75,7 @@ async function getData(dateParam?: string) {
   }
 }
 
-export const revalidate = 0;
+export const revalidate = 60;
 
 function SectionLabel({ children, color = 'var(--text-muted)' }: { children: React.ReactNode; color?: string }) {
   return (

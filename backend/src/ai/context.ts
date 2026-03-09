@@ -1,9 +1,9 @@
-import { format, addDays, subDays, parseISO } from 'date-fns';
+import { format, addDays, parseISO } from 'date-fns';
 import { getOverdueTasks, getTasksForDate, getTasksInRange } from '../db/queries/tasks';
 import { getActiveGoals } from '../db/queries/goals';
 import { getJournalByDate } from '../db/queries/journals';
 import { getEventsForDate, CalendarEvent } from '../services/calendar';
-import { getLocalToday } from '../services/localdate';
+import { getLocalToday, getLocalYesterday, getLocalTomorrow, getLocalHour } from '../services/localdate';
 
 export interface ContextPack {
   today: string;
@@ -118,24 +118,20 @@ export function contextPackToString(ctx: ContextPack): string {
   return lines.join('\n').trim();
 }
 
-export function determineDebriefDates(now: Date = new Date()): { debriefDate: string; planDate: string } {
-  // Get local hour in the user's timezone
+export function determineDebriefDates(): { debriefDate: string; planDate: string } {
+  // All date strings are derived from getLocalToday/Yesterday/Tomorrow, which respect
+  // USER_TZ env var. This ensures debrief dates match the user's local day, not UTC.
   const tz = process.env.USER_TZ || undefined;
-  const hour = tz
-    ? parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(now), 10)
-    : now.getHours();
+  const hour = getLocalHour(tz);
+  const today = getLocalToday(tz);
+  const yesterday = getLocalYesterday(tz);
+  const tomorrow = getLocalTomorrow(tz);
 
   if (hour >= 14) {
-    // After 2pm: debrief today, plan tomorrow
-    return {
-      debriefDate: dateStr(now),
-      planDate: dateStr(addDays(now, 1)),
-    };
+    // After 2pm local time: debrief today, plan tomorrow
+    return { debriefDate: today, planDate: tomorrow };
   } else {
-    // Before 2pm: debrief yesterday, plan today
-    return {
-      debriefDate: dateStr(subDays(now, 1)),
-      planDate: dateStr(now),
-    };
+    // Before 2pm local time: debrief yesterday, plan today
+    return { debriefDate: yesterday, planDate: today };
   }
 }

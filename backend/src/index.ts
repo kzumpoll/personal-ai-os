@@ -31,6 +31,9 @@ app.get('/health', async (_req: Request, res: Response) => {
     db: dbOk ? 'connected' : 'error',
     calendar: calOk ? 'configured' : 'not_configured',
     claude_code: claudeStatus?.status ?? 'unknown',
+    // Railway injects these env vars automatically when connected to a git repo
+    git_commit: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+    git_branch: process.env.RAILWAY_GIT_BRANCH ?? null,
   });
 });
 

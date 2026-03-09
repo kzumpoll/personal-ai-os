@@ -21,6 +21,12 @@ interface ClaudeStatus {
   updated_at: string | null;
 }
 
+interface BackendHealth {
+  git_commit: string | null;
+  git_branch: string | null;
+  status: string;
+}
+
 async function getData() {
   const today = getLocalToday();
   const empty = {
@@ -29,6 +35,7 @@ async function getData() {
     mutations: [] as MutationLog[], ideas: [] as Idea[], thoughts: [] as Thought[],
     completedToday: [] as Task[], todayStr: today,
     claudeStatus: null as ClaudeStatus | null,
+    backendHealth: null as BackendHealth | null,
   };
 
   try {
@@ -52,10 +59,19 @@ async function getData() {
       ).catch(() => ({ rows: [] as ClaudeStatus[] })),
     ]);
 
-    const completedTodayTasks = await pool.query<Task>(
-      `SELECT * FROM tasks WHERE status = 'done' AND completed_at::date = $1 ORDER BY completed_at DESC LIMIT 8`,
-      [today]
-    );
+    // Fetch backend health in parallel with the completed-today query
+    const backendUrl = process.env.BACKEND_URL;
+    const [completedTodayTasks, backendHealthRes] = await Promise.all([
+      pool.query<Task>(
+        `SELECT * FROM tasks WHERE status = 'done' AND completed_at::date = $1 ORDER BY completed_at DESC LIMIT 8`,
+        [today]
+      ),
+      backendUrl
+        ? fetch(`${backendUrl}/health`, { next: { revalidate: 60 } })
+            .then((r) => r.json() as Promise<BackendHealth>)
+            .catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
     const result = {
       openCount:    parseInt(openRes.rows[0]?.count ?? '0'),
@@ -68,6 +84,7 @@ async function getData() {
       completedToday: completedTodayTasks.rows,
       todayStr:     today,
       claudeStatus: claudeRes.rows[0] ?? null,
+      backendHealth: backendHealthRes,
     };
     console.log(
       `[command-center] query results — open:${result.openCount} overdue:${result.overdueCount}` +
@@ -162,7 +179,7 @@ function fmtTime(ts: string): string {
 export default async function CommandCenterPage() {
   const {
     openCount, overdueCount, doneCount,
-    journal, mutations, ideas, thoughts, completedToday, todayStr, claudeStatus,
+    journal, mutations, ideas, thoughts, completedToday, todayStr, claudeStatus, backendHealth,
   } = await getData();
 
   const dateLabel = format(new Date(getLocalToday() + 'T12:00:00'), 'EEEE, MMMM d');
@@ -299,19 +316,43 @@ export default async function CommandCenterPage() {
 
           {/* Deploy info */}
           {(() => {
-            const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null;
-            const msg = process.env.VERCEL_GIT_COMMIT_MESSAGE ?? null;
-            if (!sha) return null;
+            const frontendSha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null;
+            const frontendMsg = process.env.VERCEL_GIT_COMMIT_MESSAGE ?? null;
+            const backendSha = backendHealth?.git_commit ?? null;
+            const mismatch = frontendSha && backendSha && frontendSha !== backendSha;
+            if (!frontendSha && !backendSha) return null;
             return (
               <Card>
-                <SectionTitle>Last Deploy</SectionTitle>
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '11px', color: 'var(--cyan)' }}>[{sha}]</span>
-                    {msg && <span className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{msg.slice(0, 60)}</span>}
-                  </div>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
-                    {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} · Vercel
+                <SectionTitle>Deploy State</SectionTitle>
+                <div className="flex flex-col gap-2">
+                  {frontendSha && (
+                    <div className="flex items-center justify-between">
+                      <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Frontend</span>
+                      <div className="flex items-center gap-1.5">
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--cyan)' }}>[{frontendSha}]</span>
+                        {frontendMsg && <span className="text-xs truncate" style={{ color: 'var(--text-muted)', maxWidth: 120 }}>{frontendMsg.slice(0, 40)}</span>}
+                      </div>
+                    </div>
+                  )}
+                  {backendSha && (
+                    <div className="flex items-center justify-between">
+                      <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Backend</span>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: mismatch ? 'var(--amber)' : 'var(--cyan)' }}>[{backendSha}]</span>
+                    </div>
+                  )}
+                  {!backendSha && (
+                    <div className="flex items-center justify-between">
+                      <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Backend</span>
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}>unreachable</span>
+                    </div>
+                  )}
+                  {mismatch && (
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span style={{ fontSize: '10px', color: 'var(--amber)' }}>⚠ Versions differ — backend may be deploying</span>
+                    </div>
+                  )}
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)', marginTop: 2 }}>
+                    {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} branch
                   </span>
                 </div>
               </Card>

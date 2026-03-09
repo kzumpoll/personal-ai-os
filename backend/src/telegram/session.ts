@@ -86,6 +86,12 @@ export type SessionState =
       state: 'pending_capture';
       captureType: CaptureType;
       captureContent: string;
+    }
+  | {
+      // Multiple calendar events matched "remove X from plan" — waiting for user to pick one
+      state: 'pending_remove_event';
+      planDate: string;
+      candidates: Array<{ id: string; title: string; start: string }>;
     };
 
 const sessions = new Map<number, SessionState>();
