@@ -493,9 +493,10 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
-  // --- LLM-first day plan routing ---
-  // If a plan exists for the relevant date, always try to interpret the message as a plan mutation.
-  // Only fall through to normal classification if mutation type is 'unknown'.
+  // --- LLM-first day plan / intention / win routing ---
+  // Always call interpretDayPlanEdit — even without a plan.
+  // Mutations that need the rendered schedule (remove/move/change_wake/regenerate) will error gracefully if no plan exists.
+  // Mutations that don't need the schedule (log_win, set_mit, set_k1, set_k2) always work.
   {
     const planCheckDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
     let planForCheck: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
@@ -504,19 +505,34 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     } catch (dpCheckErr) {
       console.error('[bot] day plan check error:', dpCheckErr instanceof Error ? dpCheckErr.message : dpCheckErr);
     }
-    if (planForCheck && planForCheck.schedule.length > 0) {
-      try {
-        const calendarEventsForPlan = await getEventsForDate(planCheckDate);
-        const mutation = await interpretDayPlanEdit(text, planForCheck.schedule, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
-        if (mutation.type !== 'unknown') {
-          await applyDayPlanMutation(planCheckDate, mutation, planForCheck, calendarEventsForPlan, reply);
+
+    // Only fetch calendar events when a plan exists (needed for event ID resolution)
+    const calendarEventsForPlan = planForCheck ? await getEventsForDate(planCheckDate) : [];
+    const scheduleForEdit = planForCheck?.schedule ?? [];
+
+    try {
+      const mutation = await interpretDayPlanEdit(text, scheduleForEdit, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
+      if (mutation.type !== 'unknown') {
+        // Mutations that require an existing rendered schedule
+        const needsSchedule = (
+          mutation.type === 'remove_event' ||
+          mutation.type === 'change_wake_time' ||
+          mutation.type === 'move_block' ||
+          mutation.type === 'remove_block' ||
+          mutation.type === 'regenerate'
+        );
+        if (needsSchedule && (!planForCheck || planForCheck.schedule.length === 0)) {
+          await reply(`No day plan saved for ${planCheckDate}. Run your daily debrief with a Wake: HH:MM to generate one.`);
           return;
         }
-        console.log('[bot] interpretDayPlanEdit returned unknown — falling through to classifier');
-      } catch (dpEditErr) {
-        console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
-        // Fall through to normal classification
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        await applyDayPlanMutation(planCheckDate, mutation, (planForCheck ?? {}) as NonNullable<typeof planForCheck>, calendarEventsForPlan, reply);
+        return;
       }
+      console.log('[bot] interpretDayPlanEdit returned unknown — falling through to classifier');
+    } catch (dpEditErr) {
+      console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
+      // Fall through to normal classification
     }
   }
 
