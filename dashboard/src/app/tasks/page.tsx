@@ -13,6 +13,8 @@ async function getBoard() {
   const tomorrow = format(addDays(now, 1), 'yyyy-MM-dd');
   const next7End = format(addDays(now, 7), 'yyyy-MM-dd');
 
+  console.log(`[getBoard] query params  today=${today}  tomorrow=${tomorrow}  next7End=${next7End}`);
+
   try {
     const { rows } = await pool.query<Task & { bucket: string }>(
       `SELECT *,
@@ -28,6 +30,10 @@ async function getBoard() {
        ORDER BY due_date ASC NULLS LAST`,
       [today, tomorrow, next7End]
     );
+    console.log(
+      `[getBoard] ${rows.length} tasks returned: ` +
+      rows.map((r) => `${r.id.slice(0, 8)} due=${JSON.stringify(r.due_date)} bucket=${r.bucket}`).join(' | ')
+    );
     return {
       overdue:  rows.filter((r) => r.bucket === 'overdue'),
       today:    rows.filter((r) => r.bucket === 'today'),
@@ -41,7 +47,9 @@ async function getBoard() {
   }
 }
 
-export const revalidate = 30;
+// No ISR — tasks page must always reflect DB state after mutations.
+// router.refresh() + revalidatePath in the API route handle cache busting.
+export const revalidate = 0;
 
 export default async function TasksPage() {
   const board = await getBoard();

@@ -78,6 +78,7 @@ export interface Idea {
   actionability: string | null;
   next_step: string | null;
   linked_project_id: string | null;
+  linked_task_id: string | null;
   status: string;
   created_at: string;
 }

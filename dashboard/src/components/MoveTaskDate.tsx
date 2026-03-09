@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { format, addDays } from 'date-fns';
 import { CalendarDays } from 'lucide-react';
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function MoveTaskDate({ taskId, currentDue }: Props) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -19,13 +21,19 @@ export default function MoveTaskDate({ taskId, currentDue }: Props) {
   const move = async (date: string) => {
     setSaving(true);
     setOpen(false);
+    console.log('[MoveTaskDate] PATCH payload', { id: taskId, due_date: date });
     try {
-      await fetch('/api/tasks', {
+      const res = await fetch('/api/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: taskId, due_date: date }),
       });
-      window.location.reload();
+      const data = await res.json().catch(() => null);
+      console.log('[MoveTaskDate] PATCH response', res.status, data);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(data)}`);
+      router.refresh();
+    } catch (err) {
+      console.error('[MoveTaskDate] move failed', err);
     } finally {
       setSaving(false);
     }

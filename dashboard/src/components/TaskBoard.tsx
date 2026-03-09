@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   DndContext,
   DragEndEvent,
@@ -82,8 +83,12 @@ function DraggableCard({ task, bucket }: { task: Task; bucket: Bucket }) {
 }
 
 export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }: Props) {
+  const router = useRouter();
   const [board, setBoard] = useState(initialBoard);
   const [activeTask, setActiveTask] = useState<{ task: Task; sourceBucket: Bucket } | null>(null);
+
+  // Sync local board state when server sends fresh data (after router.refresh())
+  useEffect(() => { setBoard(initialBoard); }, [initialBoard]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -118,14 +123,20 @@ export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }
       return next;
     });
 
+    const payload = { id: task.id, due_date: newDate };
+    console.log('[TaskBoard] PATCH payload', payload);
     try {
       const res = await fetch('/api/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: task.id, due_date: newDate }),
+        body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error('Failed');
-    } catch {
+      const data = await res.json().catch(() => null);
+      console.log('[TaskBoard] PATCH response', res.status, data);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(data)}`);
+      router.refresh();
+    } catch (err) {
+      console.error('[TaskBoard] move failed, reverting', err);
       setBoard(initialBoard); // revert
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps

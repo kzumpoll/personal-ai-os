@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Task } from '@/lib/db';
 import MoveTaskDate from './MoveTaskDate';
 
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export default function TaskCard({ task, bucket }: Props) {
+  const router = useRouter();
   const accent = bucketAccent[bucket];
   const initialDone = bucket === 'done';
   const [done, setDone] = useState(initialDone);
@@ -42,11 +44,13 @@ export default function TaskCard({ task, bucket }: Props) {
     setDone(!done);
     setLoading(true);
     try {
-      await fetch('/api/tasks', {
+      const res = await fetch('/api/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: task.id, status: newStatus }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      router.refresh(); // bust ISR cache so re-render reflects DB state
     } catch {
       setDone(done); // revert on error
     } finally {

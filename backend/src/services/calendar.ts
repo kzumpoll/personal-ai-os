@@ -107,8 +107,37 @@ function buildAuth(): InstanceType<typeof google.auth.OAuth2> | null {
 }
 
 /**
+ * Convert a YYYY-MM-DD date + HH:MM:SS time in a given IANA timezone to a UTC Date.
+ * Example: localTimeToUtc('2026-03-07', '00:00:00', 'Asia/Bangkok') → 2026-03-06T17:00:00.000Z
+ */
+function localTimeToUtc(dateStr: string, timeStr: string, tz: string): Date {
+  // Step 1: treat the naive time as UTC to get a rough reference point
+  const naive = new Date(`${dateStr}T${timeStr}.000Z`);
+
+  // Step 2: find what clock time this UTC moment shows in the target timezone
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(naive);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? '0');
+
+  // Step 3: compute the timezone offset as: naiveUTC - localAsUtc
+  // e.g. UTC+7: naive=00:00Z, local shows 07:00 → localAsUtcMs=07:00Z → offset=-7h
+  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const offsetMs = naive.getTime() - localAsUtcMs;
+
+  // Step 4: shift the naive UTC time by the offset to get the correct UTC boundary
+  // e.g. 00:00Z + (-7h) = 17:00Z previous day = midnight Bangkok ✓
+  return new Date(naive.getTime() + offsetMs);
+}
+
+/**
  * Fetch events for a specific date (YYYY-MM-DD) from the primary calendar.
- * Returns [] if credentials are not configured or the API call fails.
+ * Uses USER_TZ timezone so that midnight boundaries match the user's local day,
+ * not the server's UTC day. Returns [] if credentials are not configured or the API call fails.
  */
 export async function getEventsForDate(date: string): Promise<CalendarEvent[]> {
   const result = buildAuthWithReason();
@@ -116,13 +145,15 @@ export async function getEventsForDate(date: string): Promise<CalendarEvent[]> {
 
   try {
     const calendar = google.calendar({ version: 'v3', auth: result.auth });
-    const dayStart = new Date(`${date}T00:00:00`);
-    const dayEnd = new Date(`${date}T23:59:59`);
+    const tz = process.env.USER_TZ ?? 'UTC';
+    const dayStart = localTimeToUtc(date, '00:00:00', tz);
+    const dayEnd = localTimeToUtc(date, '23:59:59', tz);
 
     const res = await calendar.events.list({
       calendarId: 'primary',
       timeMin: dayStart.toISOString(),
       timeMax: dayEnd.toISOString(),
+      timeZone: tz,
       singleEvents: true,
       orderBy: 'startTime',
       maxResults: 20,

@@ -19,6 +19,7 @@ import {
   Search,
   BarChart2,
 } from 'lucide-react';
+import ClaudeCodeIndicator from './ClaudeCodeIndicator';
 
 const navGroups = [
   {
@@ -153,22 +154,7 @@ export default function Sidebar() {
           <span style={{ fontSize: '12px' }}>{isDark ? 'Light mode' : 'Dark mode'}</span>
         </button>
 
-        <div className="flex items-center gap-2">
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full"
-            style={{ background: 'var(--green)', boxShadow: '0 0 4px var(--green)' }}
-          />
-          <span
-            style={{
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: '9px',
-              letterSpacing: '0.1em',
-              color: 'var(--text-faint)',
-            }}
-          >
-            SYSTEM ONLINE
-          </span>
-        </div>
+        <ClaudeCodeIndicator />
       </div>
     </aside>
   );

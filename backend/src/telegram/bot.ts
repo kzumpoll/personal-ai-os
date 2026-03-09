@@ -138,14 +138,6 @@ function parseTimeInput(raw: string): string | null {
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
-/**
- * Detect whether the message is a request to show the day plan.
- */
-function detectDayPlanCommand(lower: string): 'show' | null {
-  if (/\b(day plan|my plan|show.*plan|today'?s? plan|show.*agenda)\b/.test(lower)) return 'show';
-  return null;
-}
-
 function formatPlanReply(heading: string, diff: string | null, agenda?: string): string {
   const parts = [heading];
   if (diff) {
@@ -167,6 +159,16 @@ async function applyDayPlanMutation(
   reply: (msg: string) => Promise<unknown>
 ): Promise<void> {
   switch (mutation.type) {
+    case 'show': {
+      const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
+      if (!p || !p.schedule.length) {
+        await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
+      } else {
+        await reply(formatAgendaForBot(p.schedule, p.overflow, planDate));
+      }
+      break;
+    }
+
     case 'remove_event': {
       const ev = calendarEvents.find((e) => e.id === mutation.event_id)
         ?? calendarEvents.find((e) => e.title.toLowerCase() === (mutation.event_title ?? '').toLowerCase());
@@ -294,6 +296,14 @@ async function applyDayPlanMutation(
       break;
     }
 
+    case 'plan_question': {
+      await reply(
+        mutation.answer_text ??
+        `Yes — you can view, edit, or regenerate your day plan. Try:\n• "show my plan"\n• "move lunch to 1pm"\n• "remove standup from my plan"\n• "redo my day from here"`
+      );
+      break;
+    }
+
     case 'unknown':
     default: {
       await reply(
@@ -302,24 +312,6 @@ async function applyDayPlanMutation(
       );
     }
   }
-}
-
-async function handleDayPlanCommand(
-  chatId: number,
-  lower: string,
-  _text: string,
-  reply: (msg: string) => Promise<unknown>
-): Promise<void> {
-  const today = getLocalToday();
-  const tomorrow = getLocalTomorrow();
-  const planDate = /\btomorrow\b/.test(lower) ? tomorrow : today;
-
-  const plan = await getDayPlanByDate(planDate);
-  if (!plan || !plan.schedule.length) {
-    await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
-    return;
-  }
-  await reply(formatAgendaForBot(plan.schedule, plan.overflow, planDate));
 }
 
 function isAffirmative(lower: string): boolean {
@@ -482,63 +474,9 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
-  // --- Fast-path: show day plan (no LLM call needed) ---
-  if (detectDayPlanCommand(lower) === 'show') {
-    try {
-      await handleDayPlanCommand(chatId, lower, text, reply);
-    } catch (dpErr) {
-      console.error('[bot] day plan show error:', dpErr instanceof Error ? dpErr.message : dpErr);
-      await reply('Something went wrong loading the day plan. Please try again.');
-    }
-    return;
-  }
-
-  // --- LLM-first day plan / intention / win routing ---
-  // Always call interpretDayPlanEdit — even without a plan.
-  // Mutations that need the rendered schedule (remove/move/change_wake/regenerate) will error gracefully if no plan exists.
-  // Mutations that don't need the schedule (log_win, set_mit, set_k1, set_k2) always work.
-  {
-    const planCheckDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
-    let planForCheck: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
-    try {
-      planForCheck = await getDayPlanByDate(planCheckDate);
-    } catch (dpCheckErr) {
-      console.error('[bot] day plan check error:', dpCheckErr instanceof Error ? dpCheckErr.message : dpCheckErr);
-    }
-
-    // Only fetch calendar events when a plan exists (needed for event ID resolution)
-    const calendarEventsForPlan = planForCheck ? await getEventsForDate(planCheckDate) : [];
-    const scheduleForEdit = planForCheck?.schedule ?? [];
-
-    try {
-      const mutation = await interpretDayPlanEdit(text, scheduleForEdit, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
-      if (mutation.type !== 'unknown') {
-        // Mutations that require an existing rendered schedule
-        const needsSchedule = (
-          mutation.type === 'remove_event' ||
-          mutation.type === 'change_wake_time' ||
-          mutation.type === 'move_block' ||
-          mutation.type === 'remove_block' ||
-          mutation.type === 'regenerate'
-        );
-        if (needsSchedule && (!planForCheck || planForCheck.schedule.length === 0)) {
-          await reply(`No day plan saved for ${planCheckDate}. Run your daily debrief with a Wake: HH:MM to generate one.`);
-          return;
-        }
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        await applyDayPlanMutation(planCheckDate, mutation, (planForCheck ?? {}) as NonNullable<typeof planForCheck>, calendarEventsForPlan, reply);
-        return;
-      }
-      console.log('[bot] interpretDayPlanEdit returned unknown — falling through to classifier');
-    } catch (dpEditErr) {
-      console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
-      // Fall through to normal classification
-    }
-  }
-
-  // --- Top-level 4-way classification ---
-  // buildContextPack() makes DB queries — if the DB is down, use empty context so Claude
-  // can still respond rather than crashing the whole handler.
+  // --- Top-level classification (app_action / assistant_answer / capture_candidate / casual / day_plan) ---
+  // The main classifier decides the route. day_plan messages are then passed to
+  // interpretDayPlanEdit for fine-grained mutation parsing.
   let ctx: Awaited<ReturnType<typeof buildContextPack>>;
   try {
     ctx = await buildContextPack();
@@ -554,6 +492,55 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   console.log('[bot] classifying message for chat', chatId);
   const classified = await classifyAndRespond(text, ctx, getHistory(chatId));
   console.log('[bot] route_type:', classified.route_type, '| needs_tool:', classified.needs_tool ?? 'none');
+
+  // --- Day plan route: classifier decided this is about the schedule ---
+  if (classified.route_type === 'day_plan') {
+    // Confidence gate: low confidence or medium+follow_up → ask for clarification
+    const followUp = classified.follow_up_question;
+    if (
+      classified.confidence === 'low' ||
+      (classified.confidence === 'medium' && followUp)
+    ) {
+      await reply(followUp ?? "I'm not sure what you'd like to do with your plan. Try: \"show my plan\", \"redo my plan\", \"move lunch to 1pm\", or \"win: <what you finished>\".");
+      return;
+    }
+    const planCheckDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
+    let planForCheck: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
+    try {
+      planForCheck = await getDayPlanByDate(planCheckDate);
+    } catch (dpCheckErr) {
+      console.error('[bot] day plan check error:', dpCheckErr instanceof Error ? dpCheckErr.message : dpCheckErr);
+    }
+    const calendarEventsForPlan = planForCheck ? await getEventsForDate(planCheckDate) : [];
+    const scheduleForEdit = planForCheck?.schedule ?? [];
+    try {
+      const mutation = await interpretDayPlanEdit(text, scheduleForEdit, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
+      console.log('[bot] day plan mutation:', mutation.type);
+      if (mutation.type !== 'unknown') {
+        const needsSchedule = (
+          mutation.type === 'show' ||
+          mutation.type === 'remove_event' ||
+          mutation.type === 'change_wake_time' ||
+          mutation.type === 'move_block' ||
+          mutation.type === 'remove_block' ||
+          mutation.type === 'regenerate'
+        );
+        // plan_question answers are self-contained — skip the "no plan saved" guard
+        if (mutation.type !== 'plan_question' && needsSchedule && (!planForCheck || planForCheck.schedule.length === 0)) {
+          await reply(`No day plan saved for ${planCheckDate}. Run your daily debrief with a Wake: HH:MM to generate one.`);
+          return;
+        }
+        await applyDayPlanMutation(planCheckDate, mutation, (planForCheck ?? {}) as NonNullable<typeof planForCheck>, calendarEventsForPlan, reply);
+        return;
+      }
+      // Plan interpreter returned unknown — give a brief help response
+      await reply(`Not sure what to do with the plan. Try:\n• "show my plan"\n• "redo my day plan"\n• "move lunch to 1pm"\n• "wake at 7:30"\n• "win: <what you finished>"`);
+    } catch (dpEditErr) {
+      console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
+      await reply('Something went wrong with the day plan. Try "show my plan" or "redo my plan".');
+    }
+    return;
+  }
 
   // Execute tool calls BEFORE routing so the answer is real, not fabricated
   if (classified.needs_tool && classified.route_type === 'assistant_answer') {

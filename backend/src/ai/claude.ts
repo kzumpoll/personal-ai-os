@@ -5,7 +5,7 @@ import { ContextPack, contextPackToString } from './context';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface DayPlanMutation {
-  type: 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'unknown';
+  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'plan_question' | 'unknown';
   event_id?: string;       // for remove_event
   event_title?: string;    // for remove_event (display)
   new_time?: string;       // for change_wake_time (HH:MM)
@@ -16,6 +16,7 @@ export interface DayPlanMutation {
   k1_value?: string;       // for set_k1
   k2_value?: string;       // for set_k2
   target_date?: string;    // for set_mit/k1/k2 (YYYY-MM-DD)
+  answer_text?: string;    // for plan_question
   message?: string;        // for unknown
 }
 
@@ -28,6 +29,7 @@ Always respond with a single JSON object. Never add prose outside the JSON.
   "assistant_answer"  — general questions, planning help, thinking together, open-ended requests
   "capture_candidate" — something worth saving (idea, thought, win, goal, resource) said casually
   "casual"            — greetings, chitchat, short conversational exchanges
+  "day_plan"          — direct actions on the day plan: view it, edit/move/remove blocks, regenerate it, log wins, set priorities
 
 ━━━ Step 2: Return the appropriate JSON shape ━━━
 
@@ -190,6 +192,47 @@ capture_candidate — use when something is said casually that sounds worth savi
   "we should X" → idea or goal depending on scope, MEDIUM, confirm:true
   "i noticed that X", "i've been thinking about X" → thought, MEDIUM, confirm:true
   Distinguish from app_action: "add idea X" is app_action, "X could be cool" is capture_candidate
+
+day_plan — use when the user is performing a direct action on their day plan.
+  The decisive question: "Is the user doing something to the plan — viewing it, changing it, logging into it?"
+
+  VALID day_plan triggers (the user is performing an action):
+    "show my plan", "what's my agenda", "day plan" (bare — probably wants to view it) → day_plan HIGH
+    "redo my day plan", "rebuild the plan", "replan from here", "redo the rest of today" → day_plan HIGH
+    "move lunch to 1pm", "remove padel from my plan", "skip the standup today" → day_plan HIGH
+    "wake at 7:30", "change wake to 8am" → day_plan HIGH
+    "win: hit inbox zero", "log win: shipped feature" → day_plan HIGH (standalone win log)
+    "set MIT: finish proposal", "MIT: X", "k1: Y", "k2: Z" → day_plan HIGH
+    "make the day plan from here on, I just finished X" → day_plan HIGH
+    "can you help me with my day plan?" → day_plan MEDIUM, follow_up_question: "Yes — do you want to view it, edit it, or redo the rest of today?"
+
+  Route to assistant_answer instead (the user is asking a question, not performing an action):
+    "am I able to edit my day plan?" → assistant_answer (question about capability)
+    "how do I edit my day plan?" → assistant_answer (how-to question)
+    "what can I do with my day plan?" → assistant_answer (question about features)
+    "does the day plan update automatically?" → assistant_answer (factual question)
+
+  Route to capture/app_action instead (schedule words appear but intent is to save content):
+    "add idea: Advanced tea filter system ... Day Plan – Sunday ..." → app_action (the content is an idea)
+    "my day plan felt off today — note this for review" → capture_candidate or app_action
+    "article about day planning methods" → app_action
+
+  When the intent is genuinely unclear, prefer assistant_answer or capture with confidence "medium" and
+  set follow_up_question. Do not guess day_plan.
+
+  Return for day_plan:
+  {
+    "route_type": "day_plan",
+    "confidence": "high"|"medium"|"low",
+    "ambiguities": [],
+    "follow_up_question": null | "string — short clarifying question when confidence is medium/low"
+  }
+
+  IMPORTANT: day_plan takes priority over app_action for standalone wins and priorities.
+    "win: X" (standalone) → day_plan (not capture_candidate or add_win)
+    "set MIT: X" → day_plan (not app_action)
+  NEVER return day_plan for: task management, ideas, thoughts, resources, general chat, questions
+    about how the plan works, or any message where the user is not performing a plan action.
 
 casual — greetings, chitchat, very short exchanges:
   "hey", "yo", "hi", "how are you", "what's up" → casual, keep reply short and warm
@@ -701,7 +744,22 @@ ${tomorrowNote}
 
 Edit request: "${userMessage}"
 
+GUARD: If this message is not clearly about the day plan, schedule, wake time, wins, or priorities — return { "type": "unknown" } immediately. Do not default to "show". When uncertain between show and unknown, use "unknown".
+
 Return ONE JSON mutation object. Choose the type that best matches:
+
+{ "type": "show" }
+  → Use when the user wants to VIEW their current plan.
+  → Valid: "show my plan", "show day plan", "show my agenda", "what's my schedule today",
+    "show today's plan", "let me see my plan", "show tomorrow's plan"
+  → Also valid: bare "day plan" with no other context (they're probably asking to see it)
+  → INVALID — do NOT return show for:
+    "am I able to edit my day plan?" → plan_question (this is a question, not a view request)
+    "how do I edit my day plan?" → plan_question (how-to question)
+    "can you help me with my day plan?" → plan_question (help request needing clarification)
+    "save this as a thought" → unknown
+    "hey" / "hi" / general chat → unknown
+    any question starting with "how", "can I", "am I able to", "what can" → plan_question, not show
 
 { "type": "remove_event", "event_id": "<exact-id>", "event_title": "<title>" }
   → use when removing a calendar event/meeting/call from the plan
@@ -721,28 +779,41 @@ Return ONE JSON mutation object. Choose the type that best matches:
   → block_title must match exactly a title in the schedule above
 
 { "type": "regenerate" }
-  → use when user wants to rebuild the whole plan
+  → use when user wants to REBUILD or REDO the whole plan
+  → Valid: "redo my day plan", "rebuild my plan", "regenerate plan", "make a new plan",
+    "redo the plan from here", "plan from now", "replan my day", "make the day plan from here on",
+    "redo my day from here", "replan from here", "redo the rest of my day",
+    "I just finished X, make a new plan from here"
 
 { "type": "log_win", "win_content": "<win description>" }
   → use when user logs a win or accomplishment
-  → triggers: "win: X", "add win: X", "new win: X", "finished X", "completed X"
+  → triggers: "win: X", "add win: X", "new win: X"
+  → DO NOT use for "finished X" or "completed X" alone — only use win-specific phrasing
 
 { "type": "set_mit", "mit_value": "<task title>", "target_date": "YYYY-MM-DD" }
   → use when user sets their Most Important Task
-  → triggers: "set MIT: X", "MIT: X", "MIT for today: X", "MIT for tomorrow: X", "set MIT for tomorrow: X"
+  → triggers: "set MIT: X", "MIT: X", "MIT for today: X", "MIT for tomorrow: X"
   → target_date: use planDate (${planDate}) unless user says "tomorrow" (use ${tomorrowDate ?? planDate})
 
 { "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
-  → use when user sets their K1 priority
-  → same target_date rules as set_mit
+  → use when user sets their K1 priority; same target_date rules as set_mit
 
 { "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
-  → use when user sets their K2 priority
-  → same target_date rules as set_mit
+  → use when user sets their K2 priority; same target_date rules as set_mit
+
+{ "type": "plan_question", "answer_text": "<direct, helpful answer>" }
+  → Use when the user is asking a QUESTION about the day plan rather than performing an action.
+  → "am I able to edit my day plan?" → answer_text: "Yes — you can move blocks, remove events, change your wake time, or redo the whole plan. Try: 'move lunch to 1pm', 'remove standup from my plan', or 'redo my day from here'."
+  → "how do I edit my day plan?" → answer_text explaining the available editing commands
+  → "can you help me with my day plan?" → answer_text: "Yes — do you want to view it, edit a block, or redo the rest of today?"
+  → "what can I do with my day plan?" → answer_text listing capabilities
+  → Different from "unknown": plan_question is a real question deserving an answer; unknown is unrecognized input
 
 { "type": "unknown", "message": "<brief reason>" }
-  → use when the request is NOT about the day plan, wins, or priorities at all
-  → do NOT use unknown for any of the above trigger phrases — always map them
+  → DEFAULT for anything not clearly matching the above types.
+  → Use for: task management, ideas, thoughts, resources, general chat, weather,
+    anything unrelated to the day plan schedule or the mutation types listed above.
+  → "unknown" is correct and safe — callers will route it to the general assistant.
 
 Rules:
 - Parse times: "1pm"→"13:00", "7:30am"→"07:30", "noon"→"12:00"

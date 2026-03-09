@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import './globals.css';
 import Sidebar from '@/components/Sidebar';
 import { ThemeProvider } from '@/components/ThemeProvider';
-import ClaudeCodeIndicator from '@/components/ClaudeCodeIndicator';
 import RefreshButton from '@/components/RefreshButton';
 
 export const metadata: Metadata = {
@@ -35,9 +34,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           >
             {children}
           </main>
-          <div style={{ position: 'fixed', bottom: 16, left: 16, zIndex: 50 }}>
-            <ClaudeCodeIndicator />
-          </div>
           <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 50 }}>
             <RefreshButton />
           </div>

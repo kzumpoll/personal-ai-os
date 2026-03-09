@@ -301,7 +301,7 @@ export function routeDraft(draft: InterpretationDraft): RouteDecision {
 // ---------------------------------------------------------------------------
 
 export type CaptureType = 'idea' | 'thought' | 'win' | 'goal' | 'resource';
-export type RouteType = 'app_action' | 'assistant_answer' | 'capture_candidate' | 'casual';
+export type RouteType = 'app_action' | 'assistant_answer' | 'capture_candidate' | 'casual' | 'day_plan';
 
 /**
  * Unified classification result returned by classifyAndRespond().
