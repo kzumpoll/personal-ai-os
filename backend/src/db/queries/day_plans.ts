@@ -26,6 +26,10 @@ export interface DayPlan {
   ignored_event_ids: string[];
   /** Lightweight snapshots of removed events for traceability */
   ignored_event_snapshots: IgnoredEventSnapshot[];
+  /** Pre-planned focus items for the day — can be set before the debrief */
+  planned_mit: string | null;
+  planned_k1: string | null;
+  planned_k2: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +53,9 @@ export async function upsertDayPlan(data: {
        overflow = EXCLUDED.overflow,
        ignored_event_ids = EXCLUDED.ignored_event_ids,
        ignored_event_snapshots = EXCLUDED.ignored_event_snapshots,
+       planned_mit = COALESCE(day_plans.planned_mit, EXCLUDED.planned_mit),
+       planned_k1  = COALESCE(day_plans.planned_k1,  EXCLUDED.planned_k1),
+       planned_k2  = COALESCE(day_plans.planned_k2,  EXCLUDED.planned_k2),
        updated_at = NOW()
      RETURNING *`,
     [
@@ -70,4 +77,20 @@ export async function getDayPlanByDate(date: string): Promise<DayPlan | null> {
     [date]
   );
   return rows[0] ?? null;
+}
+
+export async function setDayPlanIntentions(
+  plan_date: string,
+  data: { planned_mit?: string; planned_k1?: string; planned_k2?: string }
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO day_plans (plan_date, schedule, overflow, planned_mit, planned_k1, planned_k2)
+     VALUES ($1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4)
+     ON CONFLICT (plan_date) DO UPDATE SET
+       planned_mit = COALESCE(EXCLUDED.planned_mit, day_plans.planned_mit),
+       planned_k1  = COALESCE(EXCLUDED.planned_k1,  day_plans.planned_k1),
+       planned_k2  = COALESCE(EXCLUDED.planned_k2,  day_plans.planned_k2),
+       updated_at  = NOW()`,
+    [plan_date, data.planned_mit ?? null, data.planned_k1 ?? null, data.planned_k2 ?? null]
+  );
 }

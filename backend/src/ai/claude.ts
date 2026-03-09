@@ -4,6 +4,16 @@ import { ContextPack, contextPackToString } from './context';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+export interface DayPlanMutation {
+  type: 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'unknown';
+  event_id?: string;       // for remove_event
+  event_title?: string;    // for remove_event (display)
+  new_time?: string;       // for change_wake_time (HH:MM)
+  block_title?: string;    // for move_block, remove_block
+  new_start?: string;      // for move_block (HH:MM)
+  message?: string;        // for unknown
+}
+
 const CLASSIFIER_SYSTEM_PROMPT = `You are a smart personal assistant embedded in a Telegram bot. You help with tasks, answer questions, capture ideas, and chat naturally.
 
 Always respond with a single JSON object. Never add prose outside the JSON.
@@ -650,6 +660,86 @@ User reply: ${userReply}`;
   }
 
   return result.intent;
+}
+
+export async function interpretDayPlanEdit(
+  userMessage: string,
+  schedule: Array<{ time: string; title: string; type: string; duration_min: number }>,
+  calendarEvents: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }>,
+  planDate: string
+): Promise<DayPlanMutation> {
+  // Format schedule with embedded event IDs so Claude can resolve time references
+  const scheduleText = schedule.map((b) => {
+    const eventMatch = calendarEvents.find((e) => e.title === b.title);
+    const idTag = eventMatch ? ` [event_id:${eventMatch.id}]` : '';
+    return `  ${b.time} ${b.title}${idTag} (${b.duration_min}min, type:${b.type})`;
+  }).join('\n');
+
+  const eventsText = calendarEvents
+    .filter((e) => !e.allDay)
+    .map((e) => {
+      const startStr = e.start.slice(11, 16);
+      const endStr = e.end.slice(11, 16);
+      return `  - ${e.title} [id:${e.id}] ${startStr}–${endStr}`;
+    }).join('\n') || '  (none)';
+
+  const prompt = `Day plan for ${planDate}:
+${scheduleText}
+
+Calendar events available for removal:
+${eventsText}
+
+Edit request: "${userMessage}"
+
+Return ONE JSON mutation object. Choose the type that best matches:
+
+{ "type": "remove_event", "event_id": "<exact-id>", "event_title": "<title>" }
+  → use when removing a calendar event/meeting/call from the plan
+  → find the event by time reference ("8am call" → the event starting at 08:xx) or title match
+  → event_id must be an exact id from the calendar events list above
+
+{ "type": "change_wake_time", "new_time": "HH:MM" }
+  → use when user wants to change wake time ("wake at 7:30", "change wake to 8am")
+
+{ "type": "move_block", "block_title": "<exact title>", "new_start": "HH:MM" }
+  → use when moving a block to a different time ("move lunch to 1pm", "make X earlier/later")
+  → block_title must match exactly a title in the schedule above
+
+{ "type": "remove_block", "block_title": "<exact title>" }
+  → use when removing a task block from today ("push X to tomorrow", "skip X today", "shorten/remove X")
+  → use for non-calendar blocks only (tasks, lunch, breaks)
+  → block_title must match exactly a title in the schedule above
+
+{ "type": "regenerate" }
+  → use when user wants to rebuild the whole plan
+
+{ "type": "unknown", "message": "<brief reason>" }
+  → use when the request is ambiguous or can't be mapped
+
+Rules:
+- Parse times: "1pm"→"13:00", "7:30am"→"07:30", "noon"→"12:00"
+- "earlier" without a specific time → subtract 30 min from current time
+- "later" without a specific time → add 30 min to current time
+- Calendar events (type:event in schedule) should use remove_event, not remove_block
+- Output raw JSON only — no markdown, no prose`;
+
+  try {
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 256,
+      system: 'You are a day plan mutation parser. Output only raw JSON. Never add prose or markdown fences.',
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+    const mutation = JSON.parse(cleaned) as DayPlanMutation;
+    if (!mutation.type) throw new Error('no type field');
+    return mutation;
+  } catch (err) {
+    console.error('[interpretDayPlanEdit] parse error:', err instanceof Error ? err.message : err);
+    return { type: 'unknown', message: 'Could not parse edit request.' };
+  }
 }
 
 /** Short month-day formatter — kept inline to avoid importing executor.ts */

@@ -269,37 +269,37 @@ export function diffDayPlans(
     changes.push(`Wake time: ${oldWakeTime} → ${newWakeTime}`);
   }
 
-  // Detect blocks that shifted time
   const oldByTitle = new Map(oldSchedule.map((b) => [b.title, b.time]));
   const newByTitle = new Map(newSchedule.map((b) => [b.title, b.time]));
 
-  for (const [title, newTime] of newByTitle) {
-    const oldTime = oldByTitle.get(title);
-    if (oldTime && oldTime !== newTime) {
-      changes.push(`${title}: ${oldTime} → ${newTime}`);
-    }
-  }
-
-  // Blocks removed from schedule
+  // Blocks removed
   for (const [title] of oldByTitle) {
-    if (!newByTitle.has(title) && title !== 'Free time') {
+    if (!newByTitle.has(title) && title !== 'Free time' && title !== 'Wake up') {
       changes.push(`Removed: ${title}`);
     }
   }
 
-  // Blocks added to schedule
+  // Blocks added
   for (const [title] of newByTitle) {
-    if (!oldByTitle.has(title) && title !== 'Free time') {
+    if (!oldByTitle.has(title) && title !== 'Free time' && title !== 'Wake up') {
       changes.push(`Added: ${title}`);
+    }
+  }
+
+  // Blocks that shifted time
+  for (const [title, newTime] of newByTitle) {
+    const oldTime = oldByTitle.get(title);
+    if (oldTime && oldTime !== newTime) {
+      changes.push(`${title} moved to ${newTime}`);
     }
   }
 
   // Overflow changes
   const addedOverflow = newOverflow.filter((t) => !oldOverflow.includes(t));
   const removedOverflow = oldOverflow.filter((t) => !newOverflow.includes(t));
-  for (const t of addedOverflow) changes.push(`Moved to overflow: ${t}`);
-  for (const t of removedOverflow) changes.push(`Moved from overflow: ${t}`);
+  for (const t of addedOverflow)   changes.push(`${t} moved to overflow (unscheduled)`);
+  for (const t of removedOverflow) changes.push(`${t} moved back into schedule`);
 
   if (changes.length === 0) return null;
-  return changes.join('\n');
+  return changes.map((c) => `• ${c}`).join('\n');
 }

@@ -27,7 +27,103 @@ interface Props {
   resources: Resource[];
 }
 
-export default function ResourceList({ resources }: Props) {
+interface AddFormProps {
+  onAdded: (r: Resource) => void;
+}
+
+function AddResourceForm({ onAdded }: AddFormProps) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [type, setType] = useState('note');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/resources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim(), content_or_url: content.trim() || undefined, type }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      const created = await res.json() as Resource;
+      onAdded(created);
+      setTitle(''); setContent(''); setType('note'); setOpen(false);
+    } catch (err) {
+      console.error('AddResourceForm save error:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mb-2">
+      {!open ? (
+        <button
+          onClick={() => setOpen(true)}
+          className="text-sm px-3 py-1.5 rounded-lg transition-colors"
+          style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}
+        >
+          + Add resource
+        </button>
+      ) : (
+        <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <p className="text-xs mb-3" style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.12em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>New resource</p>
+          <div className="flex flex-col gap-2">
+            <input
+              autoFocus
+              placeholder="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text)', fontSize: 13, outline: 'none', width: '100%' }}
+            />
+            <textarea
+              placeholder="URL, notes, or content (optional)"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={3}
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text)', fontSize: 13, outline: 'none', resize: 'vertical', width: '100%', fontFamily: 'inherit' }}
+            />
+            <div className="flex items-center gap-2">
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', color: 'var(--text-muted)', fontSize: 12, outline: 'none', cursor: 'pointer' }}
+              >
+                {['note', 'link', 'article', 'book', 'video', 'tool'].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+              <div style={{ flex: 1 }} />
+              <button
+                onClick={() => { setOpen(false); setTitle(''); setContent(''); }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', fontSize: 12, padding: '4px 8px' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!title.trim() || saving}
+                style={{
+                  background: title.trim() ? 'var(--cyan)' : 'var(--surface)',
+                  border: 'none', borderRadius: 6, color: title.trim() ? '#fff' : 'var(--text-faint)',
+                  cursor: title.trim() ? 'pointer' : 'default', fontSize: 12, fontWeight: 600, padding: '4px 14px',
+                }}
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ResourceList({ resources: initial }: Props) {
+  const [resources, setResources] = useState<Resource[]>(initial);
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState<string | null>(null);
 
@@ -55,6 +151,12 @@ export default function ResourceList({ resources }: Props) {
 
   return (
     <div>
+      {/* Add Resource form */}
+      <AddResourceForm onAdded={(r) => setResources((prev) => [r, ...prev])} />
+
+      {/* gap */}
+      <div className="mb-5" />
+
       {/* Search + filters */}
       <div className="flex flex-col gap-3 mb-5">
         <div
