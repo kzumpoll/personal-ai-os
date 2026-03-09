@@ -1,6 +1,7 @@
 import { format, addDays, parseISO } from 'date-fns';
 import pool, { Task, Journal, Goal, logDbError } from '@/lib/db';
 import { getEventsForDate, CalendarEvent, formatEventTime } from '@/lib/calendar';
+import { getLocalToday } from '@/lib/date';
 import TaskCard from '@/components/TaskCard';
 import PageHeader from '@/components/PageHeader';
 import DayNav from '@/components/DayNav';
@@ -22,9 +23,9 @@ interface DayPlan {
 }
 
 async function getData(dateParam?: string) {
-  const now = new Date();
-  const baseDate = dateParam ? parseISO(dateParam) : now;
-  const today = format(baseDate, 'yyyy-MM-dd');
+  // Use timezone-aware today (fixes UTC vs user timezone mismatch on Vercel)
+  const today = dateParam ?? getLocalToday();
+  const baseDate = parseISO(today + 'T12:00:00');
   const tomorrow = format(addDays(baseDate, 1), 'yyyy-MM-dd');
   const empty = {
     journal: null, overdue: [] as Task[], today: [] as Task[],
@@ -107,9 +108,9 @@ const typeColors: Record<string, string> = {
 export default async function TodayPage({ searchParams }: { searchParams: { date?: string } }) {
   const dateParam = searchParams.date;
   const { journal, overdue, today, tomorrow, completed, todayStr, calendarEvents, dayPlan, goals } = await getData(dateParam);
-  const todayDate = dateParam ? parseISO(dateParam) : new Date();
+  const todayDate = parseISO(todayStr + 'T12:00:00');
   const dateLabel = format(todayDate, 'MMMM d, yyyy');
-  const realToday = format(new Date(), 'yyyy-MM-dd');
+  const realToday = getLocalToday();
   const isToday = todayStr === realToday;
 
   return (

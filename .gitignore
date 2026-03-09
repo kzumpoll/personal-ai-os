@@ -40,3 +40,4 @@ tmp/
 backend/credentials/
 *google-token*.json
 *google-oauth*.json
+.vercel

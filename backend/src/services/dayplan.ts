@@ -9,10 +9,24 @@
  *   - Order: Clear Inbox → MIT → K1 → K2 → calendar events (interspersed) → other tasks
  *   - Default durations: Clear Inbox 60min, MIT 90min, K1 60min, K2 60min, tasks 30min
  *   - Plan until 22:30 by default
+ *   - Lunch: always 30 min, placed in first free slot between 12:00–15:00
+ *   - Pre-event buffer: 30 min "Prep / Leave" block added before physical activity events
  */
 
 import { CalendarEvent } from './calendar';
 import { ScheduleBlock } from '../db/queries/day_plans';
+
+// Physical activity keywords that trigger a 30-min prep/travel buffer before the event
+const PHYSICAL_KEYWORDS = [
+  'padel', 'training', 'gym', 'workout', 'lesson', 'tennis', 'football',
+  'soccer', 'swimming', 'yoga', 'pilates', 'crossfit', 'boxing', 'hiking',
+  'cycling', 'run', 'jog', 'class', 'basketball', 'volleyball',
+];
+
+function needsPrepBuffer(title: string): boolean {
+  const lower = title.toLowerCase();
+  return PHYSICAL_KEYWORDS.some((k) => lower.includes(k));
+}
 
 function parseHHMM(t: string): number {
   const [h, m] = t.split(':').map(Number);
@@ -57,25 +71,38 @@ export function generateDayPlan(params: {
   k2?: string;
   otherTasks?: string[];      // task titles
   workEnd?: string;           // HH:MM, default 22:30
+  ignoredEventKeywords?: string[];  // lowercase keywords — events matching these are excluded
 }): { schedule: ScheduleBlock[]; overflow: string[]; work_start: string } {
-  const { wakeTime, calendarEvents, mit, k1, k2, otherTasks = [], workEnd = '22:30' } = params;
+  const {
+    wakeTime, calendarEvents, mit, k1, k2,
+    otherTasks = [], workEnd = '22:30',
+    ignoredEventKeywords = [],
+  } = params;
 
   const wakeMin = parseHHMM(wakeTime);
-  const workStartMin = wakeMin + 30; // 30 min morning routine (was 60)
+  const workStartMin = wakeMin + 30; // 30 min morning routine
   const workEndMin = parseHHMM(workEnd);
 
   const schedule: ScheduleBlock[] = [];
   const overflow: string[] = [];
 
-  // --- Fixed: wake block (no work_start block) ---
+  // --- Fixed: wake block ---
   schedule.push({ time: toHHMM(wakeMin), title: 'Wake up', type: 'wake', duration_min: 30 });
 
+  // --- Filter out ignored events (matched by keyword against title) ---
+  const ignoredLower = ignoredEventKeywords.map((k) => k.toLowerCase());
+  const filteredEvents = calendarEvents.filter((e) => {
+    if (ignoredLower.length === 0) return true;
+    const titleLower = e.title.toLowerCase();
+    return !ignoredLower.some((keyword) => titleLower.includes(keyword));
+  });
+
   // --- Calendar events (fixed, sorted) ---
-  const sortedEvents = [...calendarEvents]
-    .filter((e) => !e.allDay) // skip all-day events from timeline; they go at top
+  const sortedEvents = [...filteredEvents]
+    .filter((e) => !e.allDay)
     .sort((a, b) => eventStartMinutes(a) - eventStartMinutes(b));
 
-  const allDayEvents = calendarEvents.filter((e) => e.allDay);
+  const allDayEvents = filteredEvents.filter((e) => e.allDay);
 
   // Add all-day events as non-blocking note blocks at work_start
   for (const e of allDayEvents) {
@@ -85,8 +112,7 @@ export function generateDayPlan(params: {
   // Build a simple free-slot tracker
   let cursor = workStartMin;
 
-  // Define tasks to schedule in order:
-  // Clear Inbox is ALWAYS first, then MIT → K1 → K2 → other tasks
+  // Define tasks to schedule in order
   const taskSlots: TaskSlot[] = [];
   taskSlots.push({ title: 'Clear Inbox', type: 'task', duration_min: 60 });
   if (mit) taskSlots.push({ title: mit, type: 'mit', duration_min: 90 });
@@ -96,16 +122,33 @@ export function generateDayPlan(params: {
     taskSlots.push({ title: t, type: 'task', duration_min: 30 });
   }
 
-  // Merge calendar events into a sorted list of occupied intervals
-  const occupied: Array<{ start: number; end: number; title: string }> = sortedEvents.map((e) => ({
-    start: eventStartMinutes(e),
-    end: eventStartMinutes(e) + eventDurationMinutes(e),
-    title: e.title,
-  }));
+  // Merge calendar events into occupied intervals
+  // Also add 30-min prep buffer before physical activity events
+  const occupied: Array<{ start: number; end: number; title: string }> = [];
+
+  for (const e of sortedEvents) {
+    const eventStart = eventStartMinutes(e);
+    const eventEnd = eventStart + eventDurationMinutes(e);
+    occupied.push({ start: eventStart, end: eventEnd, title: e.title });
+
+    // Add prep buffer for physical activity events
+    if (needsPrepBuffer(e.title)) {
+      const bufferStart = eventStart - 30;
+      if (bufferStart >= workStartMin) {
+        occupied.push({ start: bufferStart, end: eventStart, title: `Prep / Leave (${e.title})` });
+        schedule.push({
+          time: toHHMM(bufferStart),
+          title: `Prep / Leave`,
+          type: 'break',
+          duration_min: 30,
+        });
+      }
+    }
+  }
 
   // Insert lunch: first free 30-min slot between 12:00 and 15:00
-  const lunchWindowStart = 12 * 60; // 12:00
-  const lunchWindowEnd = 15 * 60;   // 15:00
+  const lunchWindowStart = 12 * 60;
+  const lunchWindowEnd = 15 * 60;
   let lunchPlaced = false;
   for (let t = lunchWindowStart; t <= lunchWindowEnd - 30 && !lunchPlaced; t += 15) {
     const conflict = occupied.find((o) => t < o.end && t + 30 > o.start);
@@ -131,7 +174,6 @@ export function generateDayPlan(params: {
   for (const slot of taskSlots) {
     let placed = false;
     for (let attempt = 0; attempt < 20; attempt++) {
-      // Check if cursor conflicts with any event
       const conflict = occupied.find(
         (o) => cursor < o.end && cursor + slot.duration_min > o.start
       );
@@ -139,16 +181,14 @@ export function generateDayPlan(params: {
         cursor = conflict.end + 10; // 10min buffer after events
         continue;
       }
-      // Check if it fits before workEnd
       if (cursor + slot.duration_min > workEndMin) {
         overflow.push(slot.title);
         placed = true;
         break;
       }
-      // Place it
       schedule.push({ time: toHHMM(cursor), title: slot.title, type: slot.type, duration_min: slot.duration_min });
       lastPlacedEnd = cursor + slot.duration_min;
-      cursor += slot.duration_min + 10; // 10min break between tasks
+      cursor += slot.duration_min + 10;
       placed = true;
       break;
     }

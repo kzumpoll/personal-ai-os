@@ -1,8 +1,11 @@
+import type { ReactNode } from 'react';
+
 interface Props {
   title: string;
   subtitle?: string;
   badge?: string;
   badgeColor?: 'blue' | 'cyan' | 'violet' | 'green' | 'amber' | 'red';
+  rightSlot?: ReactNode;
 }
 
 const badgeColors: Record<string, string> = {
@@ -23,7 +26,7 @@ const badgeText: Record<string, string> = {
   red:    'var(--red)',
 };
 
-export default function PageHeader({ title, subtitle, badge, badgeColor = 'cyan' }: Props) {
+export default function PageHeader({ title, subtitle, badge, badgeColor = 'cyan', rightSlot }: Props) {
   return (
     <div className="mb-8 flex items-start justify-between">
       <div>
@@ -62,6 +65,11 @@ export default function PageHeader({ title, subtitle, badge, badgeColor = 'cyan'
           </p>
         )}
       </div>
+      {rightSlot && (
+        <div className="flex items-center gap-2 mt-1">
+          {rightSlot}
+        </div>
+      )}
     </div>
   );
 }

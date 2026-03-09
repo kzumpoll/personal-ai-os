@@ -670,9 +670,14 @@ export async function confirmDebriefSummary(
   if (intent.intent !== 'save_debrief') return 'Could not parse debrief.';
 
   const d = intent.data;
-  const lines: string[] = ['Here is what I understood:'];
+  const debriefStr = fmtShortDate(d.debrief_date ?? d.entry_date);
+  const planStr = fmtShortDate(d.entry_date);
+  const lines: string[] = [
+    `Debrief: ${debriefStr} | Plan: ${planStr}`,
+    '─────────────────────',
+  ];
 
-  if (d.wake_time) lines.push(`Wake time: ${d.wake_time}`);
+  if (d.wake_time) lines.push(`Wake: ${d.wake_time}`);
   if (d.mit) lines.push(`MIT: ${d.mit}`);
   if (d.k1) lines.push(`K1: ${d.k1}`);
   if (d.k2) lines.push(`K2: ${d.k2}`);

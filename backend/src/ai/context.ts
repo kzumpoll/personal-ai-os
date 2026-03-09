@@ -3,6 +3,7 @@ import { getOverdueTasks, getTasksForDate, getTasksInRange } from '../db/queries
 import { getActiveGoals } from '../db/queries/goals';
 import { getJournalByDate } from '../db/queries/journals';
 import { getEventsForDate, CalendarEvent } from '../services/calendar';
+import { getLocalToday } from '../services/localdate';
 
 export interface ContextPack {
   today: string;
@@ -20,13 +21,15 @@ function dateStr(d: Date): string {
   return format(d, 'yyyy-MM-dd');
 }
 
-export async function buildContextPack(now: Date = new Date()): Promise<ContextPack> {
-  const todayDate = now;
+export async function buildContextPack(now?: Date): Promise<ContextPack> {
+  // Use timezone-aware today if no explicit date is provided (fixes UTC vs local timezone mismatch)
+  const todayStr = now ? format(now, 'yyyy-MM-dd') : getLocalToday();
+  const todayDate = parseISO(todayStr + 'T12:00:00');
   const tomorrowDate = addDays(todayDate, 1);
   const next7Start = addDays(tomorrowDate, 1);
   const next7End = addDays(todayDate, 7);
 
-  const today = dateStr(todayDate);
+  const today = todayStr;
   const tomorrow = dateStr(tomorrowDate);
 
   const [overdue, todayTasks, tomorrowTasks, next7Tasks, goals, todayJournal, calendarEvents] = await Promise.all([
@@ -115,8 +118,12 @@ export function contextPackToString(ctx: ContextPack): string {
   return lines.join('\n').trim();
 }
 
-export function determineDebriefDates(now: Date): { debriefDate: string; planDate: string } {
-  const hour = now.getHours();
+export function determineDebriefDates(now: Date = new Date()): { debriefDate: string; planDate: string } {
+  // Get local hour in the user's timezone
+  const tz = process.env.USER_TZ || undefined;
+  const hour = tz
+    ? parseInt(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false }).format(now), 10)
+    : now.getHours();
 
   if (hour >= 14) {
     // After 2pm: debrief today, plan tomorrow

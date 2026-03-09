@@ -1,5 +1,6 @@
 import { format, formatDistanceToNow } from 'date-fns';
 import pool, { Task, Journal, logDbError } from '@/lib/db';
+import { getLocalToday } from '@/lib/date';
 import PageHeader from '@/components/PageHeader';
 
 interface MutationLog {
@@ -21,7 +22,7 @@ interface ClaudeStatus {
 }
 
 async function getData() {
-  const today = format(new Date(), 'yyyy-MM-dd');
+  const today = getLocalToday();
   const empty = {
     openCount: 0, overdueCount: 0, doneCount: 0,
     journal: null as Journal | null,
@@ -164,7 +165,7 @@ export default async function CommandCenterPage() {
     journal, mutations, ideas, thoughts, completedToday, todayStr, claudeStatus,
   } = await getData();
 
-  const dateLabel = format(new Date(), 'EEEE, MMMM d');
+  const dateLabel = format(new Date(getLocalToday() + 'T12:00:00'), 'EEEE, MMMM d');
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -295,6 +296,27 @@ export default async function CommandCenterPage() {
               </div>
             )}
           </Card>
+
+          {/* Deploy info */}
+          {(() => {
+            const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null;
+            const msg = process.env.VERCEL_GIT_COMMIT_MESSAGE ?? null;
+            if (!sha) return null;
+            return (
+              <Card>
+                <SectionTitle>Last Deploy</SectionTitle>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '11px', color: 'var(--cyan)' }}>[{sha}]</span>
+                    {msg && <span className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{msg.slice(0, 60)}</span>}
+                  </div>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                    {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} · Vercel
+                  </span>
+                </div>
+              </Card>
+            );
+          })()}
 
           {/* System status */}
           <Card>
