@@ -5,12 +5,17 @@ import { ContextPack, contextPackToString } from './context';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface DayPlanMutation {
-  type: 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'unknown';
+  type: 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'unknown';
   event_id?: string;       // for remove_event
   event_title?: string;    // for remove_event (display)
   new_time?: string;       // for change_wake_time (HH:MM)
   block_title?: string;    // for move_block, remove_block
   new_start?: string;      // for move_block (HH:MM)
+  win_content?: string;    // for log_win
+  mit_value?: string;      // for set_mit
+  k1_value?: string;       // for set_k1
+  k2_value?: string;       // for set_k2
+  target_date?: string;    // for set_mit/k1/k2 (YYYY-MM-DD)
   message?: string;        // for unknown
 }
 
@@ -666,7 +671,8 @@ export async function interpretDayPlanEdit(
   userMessage: string,
   schedule: Array<{ time: string; title: string; type: string; duration_min: number }>,
   calendarEvents: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }>,
-  planDate: string
+  planDate: string,
+  tomorrowDate?: string
 ): Promise<DayPlanMutation> {
   // Format schedule with embedded event IDs so Claude can resolve time references
   const scheduleText = schedule.map((b) => {
@@ -683,11 +689,15 @@ export async function interpretDayPlanEdit(
       return `  - ${e.title} [id:${e.id}] ${startStr}–${endStr}`;
     }).join('\n') || '  (none)';
 
+  const tomorrowNote = tomorrowDate ? `Tomorrow's date: ${tomorrowDate}` : '';
+
   const prompt = `Day plan for ${planDate}:
 ${scheduleText}
 
 Calendar events available for removal:
 ${eventsText}
+
+${tomorrowNote}
 
 Edit request: "${userMessage}"
 
@@ -713,8 +723,26 @@ Return ONE JSON mutation object. Choose the type that best matches:
 { "type": "regenerate" }
   → use when user wants to rebuild the whole plan
 
+{ "type": "log_win", "win_content": "<win description>" }
+  → use when user logs a win or accomplishment
+  → triggers: "win: X", "add win: X", "new win: X", "finished X", "completed X"
+
+{ "type": "set_mit", "mit_value": "<task title>", "target_date": "YYYY-MM-DD" }
+  → use when user sets their Most Important Task
+  → triggers: "set MIT: X", "MIT: X", "MIT for today: X", "MIT for tomorrow: X", "set MIT for tomorrow: X"
+  → target_date: use planDate (${planDate}) unless user says "tomorrow" (use ${tomorrowDate ?? planDate})
+
+{ "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
+  → use when user sets their K1 priority
+  → same target_date rules as set_mit
+
+{ "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
+  → use when user sets their K2 priority
+  → same target_date rules as set_mit
+
 { "type": "unknown", "message": "<brief reason>" }
-  → use when the request is ambiguous or can't be mapped
+  → use when the request is NOT about the day plan, wins, or priorities at all
+  → do NOT use unknown for any of the above trigger phrases — always map them
 
 Rules:
 - Parse times: "1pm"→"13:00", "7:30am"→"07:30", "noon"→"12:00"
@@ -735,6 +763,21 @@ Rules:
     const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
     const mutation = JSON.parse(cleaned) as DayPlanMutation;
     if (!mutation.type) throw new Error('no type field');
+
+    // Debug logging
+    const details = [
+      mutation.event_id ? `event_id:${mutation.event_id}` : '',
+      mutation.event_title ? `event_title:"${mutation.event_title}"` : '',
+      mutation.block_title ? `block:"${mutation.block_title}"` : '',
+      mutation.win_content ? `win:"${mutation.win_content}"` : '',
+      mutation.mit_value ? `mit:"${mutation.mit_value}"` : '',
+      mutation.k1_value ? `k1:"${mutation.k1_value}"` : '',
+      mutation.k2_value ? `k2:"${mutation.k2_value}"` : '',
+      mutation.target_date ? `target:${mutation.target_date}` : '',
+      mutation.type === 'regenerate' ? '(will trigger full regeneration)' : '',
+    ].filter(Boolean).join(' ');
+    console.log(`[interpretDayPlanEdit] mutation:${mutation.type}${details ? ` | ${details}` : ''}`);
+
     return mutation;
   } catch (err) {
     console.error('[interpretDayPlanEdit] parse error:', err instanceof Error ? err.message : err);

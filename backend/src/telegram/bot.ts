@@ -139,23 +139,10 @@ function parseTimeInput(raw: string): string | null {
 }
 
 /**
- * Detect whether the message is a day plan command.
- * Returns the command type or null.
+ * Detect whether the message is a request to show the day plan.
  */
-function detectDayPlanCommand(lower: string): 'show' | 'edit' | null {
-  // Show plan only
+function detectDayPlanCommand(lower: string): 'show' | null {
   if (/\b(day plan|my plan|show.*plan|today'?s? plan|show.*agenda)\b/.test(lower)) return 'show';
-  // Plan editing — broad natural language patterns
-  if (
-    /\bfrom (my |the )?(plan|agenda|schedule)\b/.test(lower) ||
-    /\b(change wake|wake.*(up |time ).*(to |at )|set wake|wake at|wake up to)\b/.test(lower) ||
-    /\b(redo|regenerate|rebuild|refresh|recalculate).*(plan|schedule|agenda|day)\b/.test(lower) ||
-    /\b(move|push|shift|make).{0,50}\b(earlier|later|forward|back)\b/.test(lower) ||
-    /\bshorten\b.{0,50}\b(block|task|session|meeting|event)\b/.test(lower) ||
-    /\b(remove|ignore|exclude|skip)\b.{0,60}\b(call|meeting|event|session)\b/.test(lower) ||
-    /\b(move|make|set|change)\b.{0,30}\b(lunch|wake)\b/.test(lower) ||
-    /\bpush\b.{0,60}\b(to tomorrow|off today|out of today)\b/.test(lower)
-  ) return 'edit';
   return null;
 }
 
@@ -260,6 +247,53 @@ async function applyDayPlanMutation(
       break;
     }
 
+    case 'log_win': {
+      const content = mutation.win_content ?? '';
+      if (!content) {
+        await reply("What's the win? Try: \"win: <description>\"");
+        return;
+      }
+      await createWin({ content, entry_date: planDate });
+      await reply(`Win logged ✓\n"${content}"`);
+      break;
+    }
+
+    case 'set_mit': {
+      const value = mutation.mit_value ?? '';
+      const targetDate = mutation.target_date ?? planDate;
+      if (!value) {
+        await reply('What should the MIT be?');
+        return;
+      }
+      await setDayPlanIntentions(targetDate, { planned_mit: value });
+      await reply(`MIT for ${targetDate} set: "${value}"`);
+      break;
+    }
+
+    case 'set_k1': {
+      const value = mutation.k1_value ?? '';
+      const targetDate = mutation.target_date ?? planDate;
+      if (!value) {
+        await reply('What should K1 be?');
+        return;
+      }
+      await setDayPlanIntentions(targetDate, { planned_k1: value });
+      await reply(`K1 for ${targetDate} set: "${value}"`);
+      break;
+    }
+
+    case 'set_k2': {
+      const value = mutation.k2_value ?? '';
+      const targetDate = mutation.target_date ?? planDate;
+      if (!value) {
+        await reply('What should K2 be?');
+        return;
+      }
+      await setDayPlanIntentions(targetDate, { planned_k2: value });
+      await reply(`K2 for ${targetDate} set: "${value}"`);
+      break;
+    }
+
     case 'unknown':
     default: {
       await reply(
@@ -273,37 +307,19 @@ async function applyDayPlanMutation(
 async function handleDayPlanCommand(
   chatId: number,
   lower: string,
-  text: string,
+  _text: string,
   reply: (msg: string) => Promise<unknown>
 ): Promise<void> {
   const today = getLocalToday();
   const tomorrow = getLocalTomorrow();
   const planDate = /\btomorrow\b/.test(lower) ? tomorrow : today;
-  const cmd = detectDayPlanCommand(lower);
 
-  if (cmd === 'show') {
-    const plan = await getDayPlanByDate(planDate);
-    if (!plan || !plan.schedule.length) {
-      await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
-      return;
-    }
-    await reply(formatAgendaForBot(plan.schedule, plan.overflow, planDate));
+  const plan = await getDayPlanByDate(planDate);
+  if (!plan || !plan.schedule.length) {
+    await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
     return;
   }
-
-  if (cmd === 'edit') {
-    const plan = await getDayPlanByDate(planDate);
-    if (!plan) {
-      await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
-      return;
-    }
-    const calendarEvents = await getEventsForDate(planDate);
-    console.log('[bot] day plan: interpreting edit request for', planDate);
-    const mutation = await interpretDayPlanEdit(text, plan.schedule, calendarEvents, planDate);
-    console.log('[bot] day plan mutation:', JSON.stringify(mutation));
-    await applyDayPlanMutation(planDate, mutation, plan, calendarEvents, reply);
-    return;
-  }
+  await reply(formatAgendaForBot(plan.schedule, plan.overflow, planDate));
 }
 
 function isAffirmative(lower: string): boolean {
@@ -324,31 +340,6 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   addToHistory(chatId, 'user', text);
   const session = getSession(chatId);
   const lower = text.toLowerCase().trim();
-
-  // --- Fast-path: win capture with explicit prefix (no confirmation needed) ---
-  const winMatch = text.match(/^(?:win|add\s+win|new\s+win)[:\s]+(.+)/i);
-  if (winMatch) {
-    const content = winMatch[1].trim();
-    if (content) {
-      await createWin({ content, entry_date: getLocalToday() });
-      await reply(`Win logged ✓\n"${content}"`);
-      return;
-    }
-  }
-
-  // --- Fast-path: MIT/K1/K2 intentions for a specific date ---
-  const intentionMatch = text.match(/^(?:set\s+)?(mit|k1|k2)\s+(?:for\s+)?(today|tomorrow)[:\s]+(.+)/i);
-  if (intentionMatch) {
-    const field = intentionMatch[1].toLowerCase() as 'mit' | 'k1' | 'k2';
-    const dateTarget = intentionMatch[2].toLowerCase();
-    const value = intentionMatch[3].trim();
-    if (value) {
-      const targetDate = dateTarget === 'tomorrow' ? getLocalTomorrow() : getLocalToday();
-      await setDayPlanIntentions(targetDate, { [field]: value });
-      await reply(`${field.toUpperCase()} for ${targetDate} set: "${value}"`);
-      return;
-    }
-  }
 
   // --- Pending capture confirmation (idea/thought/win/goal/resource) ---
   if (session.state === 'pending_capture') {
@@ -491,15 +482,42 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
-  // --- Fast path: day plan commands (no Claude API call, no context pack needed) ---
-  if (detectDayPlanCommand(lower)) {
+  // --- Fast-path: show day plan (no LLM call needed) ---
+  if (detectDayPlanCommand(lower) === 'show') {
     try {
       await handleDayPlanCommand(chatId, lower, text, reply);
     } catch (dpErr) {
-      console.error('[bot] day plan command error:', dpErr instanceof Error ? dpErr.message : dpErr);
-      await reply('Something went wrong with the day plan. Please try again.');
+      console.error('[bot] day plan show error:', dpErr instanceof Error ? dpErr.message : dpErr);
+      await reply('Something went wrong loading the day plan. Please try again.');
     }
     return;
+  }
+
+  // --- LLM-first day plan routing ---
+  // If a plan exists for the relevant date, always try to interpret the message as a plan mutation.
+  // Only fall through to normal classification if mutation type is 'unknown'.
+  {
+    const planCheckDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
+    let planForCheck: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
+    try {
+      planForCheck = await getDayPlanByDate(planCheckDate);
+    } catch (dpCheckErr) {
+      console.error('[bot] day plan check error:', dpCheckErr instanceof Error ? dpCheckErr.message : dpCheckErr);
+    }
+    if (planForCheck && planForCheck.schedule.length > 0) {
+      try {
+        const calendarEventsForPlan = await getEventsForDate(planCheckDate);
+        const mutation = await interpretDayPlanEdit(text, planForCheck.schedule, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
+        if (mutation.type !== 'unknown') {
+          await applyDayPlanMutation(planCheckDate, mutation, planForCheck, calendarEventsForPlan, reply);
+          return;
+        }
+        console.log('[bot] interpretDayPlanEdit returned unknown — falling through to classifier');
+      } catch (dpEditErr) {
+        console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
+        // Fall through to normal classification
+      }
+    }
   }
 
   // --- Top-level 4-way classification ---
