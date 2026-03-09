@@ -25,6 +25,7 @@ interface BackendHealth {
   git_commit: string | null;
   git_branch: string | null;
   status: string;
+  deployed_at: string | null;
 }
 
 async function getData() {
@@ -351,9 +352,16 @@ export default async function CommandCenterPage() {
                       <span style={{ fontSize: '10px', color: 'var(--amber)' }}>⚠ Versions differ — backend may be deploying</span>
                     </div>
                   )}
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)', marginTop: 2 }}>
-                    {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} branch
-                  </span>
+                  <div className="flex items-center justify-between mt-1">
+                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                      {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} branch
+                    </span>
+                    {backendHealth?.deployed_at && (
+                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                        deployed {formatDistanceToNow(new Date(backendHealth.deployed_at), { addSuffix: true })}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </Card>
             );

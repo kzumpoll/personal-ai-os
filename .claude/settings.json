@@ -1,4 +1,27 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(pnpm *)",
+      "Bash(yarn *)",
+      "Bash(node *)",
+      "Bash(tsx *)",
+      "Bash(ts-node *)",
+      "Bash(bash ./scripts/deploy.sh*)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(mv *)",
+      "Bash(chmod *)",
+      "Bash(sudo *)",
+      "Bash(apt *)",
+      "Bash(brew *)",
+      "Bash(curl *)",
+      "Bash(wget *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
