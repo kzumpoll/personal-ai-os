@@ -39,11 +39,36 @@ function toHHMM(minutes: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/**
+ * Convert an ISO timestamp to minutes-since-midnight in USER_TZ.
+ * This correctly handles events stored in any timezone (including UTC Z-suffixed).
+ * Falls back to slicing position 11–16 only if USER_TZ is unset.
+ */
+function isoToLocalMinutes(iso: string): number {
+  const tz = process.env.USER_TZ;
+  if (tz) {
+    try {
+      const d = new Date(iso);
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const h = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+      const m = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+      return h * 60 + m;
+    } catch {
+      // fall through to slice fallback
+    }
+  }
+  // Fallback: works only if the ISO string already carries a matching offset
+  return parseHHMM(iso.slice(11, 16));
+}
+
 function eventStartMinutes(e: CalendarEvent): number {
   if (e.allDay) return 8 * 60; // treat all-day as 08:00
-  // ISO string: "2026-03-07T09:30:00+07:00"
-  const timeStr = e.start.slice(11, 16); // "09:30"
-  return parseHHMM(timeStr);
+  return isoToLocalMinutes(e.start);
 }
 
 function eventDurationMinutes(e: CalendarEvent): number {
