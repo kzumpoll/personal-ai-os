@@ -63,7 +63,10 @@ function mutationAction(mutation: DayPlanMutation): string {
     case 'remove_event':
     case 'change_wake_time':
     case 'move_block':
-    case 'remove_block': return 'edit_plan';
+    case 'remove_block':
+    case 'add_block':
+    case 'rename_block':
+    case 'resize_block': return 'edit_plan';
     case 'log_win': return 'log_win';
     case 'set_mit':
     case 'set_k1':

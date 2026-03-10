@@ -233,7 +233,7 @@ export function formatAgendaForBot(
     free: '⬜',
   };
 
-  const lines: string[] = [`Agenda for ${dateLabel}:`];
+  const lines: string[] = [`Day Plan for ${dateLabel}: [BUILD v2]`];
   for (const block of schedule) {
     if (block.duration_min === 0) {
       lines.push(`${block.time} ${typeEmoji[block.type] ?? '•'} ${block.title}`);

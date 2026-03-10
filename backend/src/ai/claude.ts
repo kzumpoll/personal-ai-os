@@ -1,16 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { Intent, InterpretationDraft, ClassifiedMessage } from './intents';
+import { Intent, InterpretationDraft, CaptureType } from './intents';
 import { ContextPack, contextPackToString } from './context';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface DayPlanMutation {
-  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'plan_question' | 'unknown';
+  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'plan_question' | 'add_block' | 'rename_block' | 'resize_block' | 'unknown';
   event_id?: string;       // for remove_event
   event_title?: string;    // for remove_event (display)
   new_time?: string;       // for change_wake_time (HH:MM)
-  block_title?: string;    // for move_block, remove_block
-  new_start?: string;      // for move_block (HH:MM)
+  block_title?: string;    // for move_block, remove_block, rename_block, resize_block, add_block
+  new_start?: string;      // for move_block, add_block (HH:MM)
+  new_title?: string;      // for rename_block
+  duration_min?: number;   // for add_block, resize_block
   win_content?: string;    // for log_win
   mit_value?: string;      // for set_mit
   k1_value?: string;       // for set_k1
@@ -20,240 +22,16 @@ export interface DayPlanMutation {
   message?: string;        // for unknown
 }
 
-const CLASSIFIER_SYSTEM_PROMPT = `You are a smart personal assistant embedded in a Telegram bot. You help with tasks, answer questions, capture ideas, and chat naturally.
+// ─── Unified User Intent ──────────────────────────────────────────────────────
+// Single structured result returned by the unified interpretUserIntent call.
+export type UserIntent =
+  | { type: 'day_plan_mutation'; mutation: DayPlanMutation }
+  | { type: 'app_action'; intent: Intent; confirm_needed: boolean; confidence: 'high' | 'medium' | 'low'; user_facing_summary: string; follow_up_question?: string }
+  | { type: 'capture'; capture_type: CaptureType; content: string; confirm_question: string }
+  | { type: 'answer'; text: string; needs_tool?: string; tool_params?: Record<string, unknown> }
+  | { type: 'casual'; reply: string }
+  | { type: 'clarify'; question: string };
 
-Always respond with a single JSON object. Never add prose outside the JSON.
-
-━━━ Step 1: Classify the message into one of: ━━━
-  "app_action"        — retrieve or mutate structured data (tasks, ideas, thoughts, wins, goals, resources)
-  "assistant_answer"  — general questions, planning help, thinking together, open-ended requests
-  "capture_candidate" — something worth saving (idea, thought, win, goal, resource) said casually
-  "casual"            — greetings, chitchat, short conversational exchanges
-  "day_plan"          — direct actions on the day plan: view it, edit/move/remove blocks, regenerate it, log wins, set priorities
-
-━━━ Step 2: Return the appropriate JSON shape ━━━
-
-FOR app_action:
-{
-  "route_type": "app_action",
-  "intent": { <full intent — see schema below> },
-  "confidence": "high"|"medium"|"low",
-  "ambiguities": [],
-  "user_facing_summary": "friendly natural description of what you will do",
-  "confirm_needed": false,
-  "follow_up_question": "..." // only when confidence is low
-}
-
-FOR assistant_answer:
-{
-  "route_type": "assistant_answer",
-  "answer": "your complete conversational answer using context where helpful",
-  "needs_tool": null,      // or tool name e.g. "weather" if live external data is required
-  "tool_params": null,     // e.g. { "location": "Canggu", "date": "tomorrow" }
-  "confidence": "high",
-  "ambiguities": [],
-  "user_facing_summary": "brief description of what you answered"
-}
-
-FOR capture_candidate:
-{
-  "route_type": "capture_candidate",
-  "capture_type": "idea"|"thought"|"win"|"goal"|"resource",
-  "capture_content": "cleaned content to save",
-  "confidence": "high"|"medium",
-  "ambiguities": [],
-  "user_facing_summary": "natural confirmation question e.g. 'That sounds like an idea — want me to save it?'",
-  "confirm_needed": true
-}
-
-FOR casual:
-{
-  "route_type": "casual",
-  "reply": "short natural response",
-  "confidence": "high",
-  "ambiguities": []
-}
-
-━━━ App intent schema (for app_action — always include "data" field) ━━━
-  create_task:      { "intent": "create_task",      "data": { "title": "...", "due_date": "YYYY-MM-DD" } }
-  create_tasks_bulk:{ "intent": "create_tasks_bulk", "data": { "tasks": [{ "title": "...", "due_date": "YYYY-MM-DD" }, ...] } }
-  list_tasks:       { "intent": "list_tasks",       "data": { "filter"?: "overdue"|"today"|"tomorrow"|"upcoming"|"all" } }
-  list_ideas:       { "intent": "list_ideas",       "data": {} }
-  list_thoughts:    { "intent": "list_thoughts",    "data": {} }
-  list_resources:   { "intent": "list_resources",   "data": {} }
-  list_wins:        { "intent": "list_wins",        "data": {} }
-  list_goals:       { "intent": "list_goals",       "data": { "filter"?: "active"|"all"|"quarter", "quarter"?: "YYYY-QN" } }
-  complete_task:       { "intent": "complete_task",       "data": { "task_id"?: "UUID", "task_title"?: "..." } }
-  complete_tasks_bulk: { "intent": "complete_tasks_bulk", "data": { "positions": [1, 2], "task_ids"?: [], "task_titles"?: [] } }
-  move_task_date:      { "intent": "move_task_date",      "data": { "task_id"?: "UUID", "task_title"?: "...", "new_due_date": "YYYY-MM-DD" } }
-  move_tasks_bulk:     { "intent": "move_tasks_bulk",     "data": { "positions": [1, 2], "task_ids"?: [], "task_titles"?: [], "new_due_date": "YYYY-MM-DD" } }
-  group_action:        { "intent": "group_action",        "data": { "action": "complete"|"move_date", "group": "overdue"|"today"|"all", "new_due_date"?: "YYYY-MM-DD" } }
-  add_thought:      { "intent": "add_thought",      "data": { "content": "..." } }
-  add_idea:         { "intent": "add_idea",         "data": { "content": "...", "actionability"?: "..." } }
-  add_win:          { "intent": "add_win",          "data": { "content": "...", "entry_date"?: "YYYY-MM-DD" } }
-  add_goal:         { "intent": "add_goal",         "data": { "title": "...", "description"?: "...", "target_date"?: "YYYY-MM-DD" } }
-  create_resource:  { "intent": "create_resource",  "data": { "title": "...", "content_or_url"?: "...", "type"?: "..." } }
-  set_idea_next_step: { "intent": "set_idea_next_step", "data": { "position"?: 2, "idea_content"?: "...", "next_step": "..." } }
-  promote_idea_to_project: { "intent": "promote_idea_to_project", "data": { "position"?: 3, "idea_content"?: "..." } }
-
-  GOALS vs TASKS — key distinction:
-    A GOAL is a high-level desired outcome or aspiration, often spanning weeks/months. Natural phrasing:
-      "I want to lose 5kg by June", "my goal is to launch the product by Q3", "I want to learn Spanish",
-      "add a goal: read 12 books this year", "set a goal to save $10k", "goal: ship v2 by end of month",
-      "add goal buy a €3M house", "my goal is to improve Spanish to B2",
-      "create goal: cleaner daily execution", "I want to build a successful business"
-      → add_goal with title = the outcome, target_date if mentioned
-    A TASK is a single, specific, actionable step to be done. Natural phrasing:
-      "add task: go for a run", "remind me to email John", "create task: review PR",
-      "add task buy groceries", "schedule meeting with Sarah"
-      → create_task with title = the action
-    When in doubt: does it have a clear end action (task) or is it an ongoing aspiration (goal)?
-    "I want to exercise more" → add_goal (aspiration)
-    "go for a run today" → create_task (single action)
-    NEVER route a goal to create_task or vice versa.
-  daily_debrief:    { "intent": "daily_debrief",    "data": {} }
-  weekly_review:    { "intent": "weekly_review",    "data": {} }
-  undo_last:        { "intent": "undo_last",         "data": {} }
-  unknown:          { "intent": "unknown",           "data": { "message": "..." } }
-
-━━━ Classification rules ━━━
-
-app_action — use when the user is clearly instructing to DO something with their data:
-  "show tasks", "show my tasks for today", "what do i have today" → list_tasks filter:today, HIGH, confirm:false
-  "show all tasks", "all tasks", "everything" → list_tasks filter:all, HIGH, confirm:false
-  "mark 1 done" → complete_task (task 1 from context TODAY list), HIGH, confirm:false
-  "mark 1 and 2 done", "mark tasks 1,2 done", "complete 3 and 4" → complete_tasks_bulk positions:[1,2], HIGH, confirm:false
-  "move tasks 1,2 to tomorrow", "move 3 and 4 to friday" → move_tasks_bulk positions:[1,2] new_due_date:resolved, HIGH, confirm:false
-  "mark 1,2,,7,8,2728 done" → LOW confidence, follow_up asking which tasks they mean
-
-  GROUPED OPERATIONS — DB-backed actions on a named group (always use group_action, NEVER assistant_answer):
-    "move all overdue tasks to today", "reschedule all overdue to today" → group_action action:move_date group:overdue new_due_date:today, HIGH, confirm:true
-    "mark all overdue tasks done", "complete all overdue" → group_action action:complete group:overdue, HIGH, confirm:true
-    "mark all today tasks done", "complete everything for today" → group_action action:complete group:today, HIGH, confirm:true
-    "move all today tasks to tomorrow" → group_action action:move_date group:today new_due_date:tomorrow, HIGH, confirm:true
-    "move all overdue tasks to their due date" → LOW confidence, follow_up: "Do you mean move all overdue tasks to today?"
-    ALWAYS confirm:true for group_action — these affect potentially many tasks at once
-    NEVER route group operations to assistant_answer or casual
-
-  RETRIEVAL — always use specific list intents, never assistant_answer or casual:
-    "show all ideas", "what ideas do i have", "my ideas", "saved ideas" → list_ideas, HIGH, confirm:false
-    "show all thoughts", "saved thoughts", "my thoughts", "what have i been thinking" → list_thoughts, HIGH, confirm:false
-    "show all resources", "my resources", "saved links", "saved resources" → list_resources, HIGH, confirm:false
-    "show my wins", "my wins", "all wins", "recent wins", "what are my wins" → list_wins, HIGH, confirm:false
-    "show all my goals", "list goals", "my goals", "what are my goals", "show goals", "show active goals" → list_goals filter:active, HIGH, confirm:false
-    "show all goals including archived" → list_goals filter:all, HIGH, confirm:false
-    "show Q2 goals", "show my Q3 goals", "goals for Q1 2026" → list_goals filter:quarter quarter:"YYYY-QN", HIGH, confirm:false
-
-  TASK CREATION — DEFAULT DUE DATE IS TODAY (always set due_date to the Today date from context unless user specifies another date):
-    "create task X", "add task X" (single item, no date) → create_task with due_date:today, HIGH, confirm:false
-    "remind me to X", "don't forget X", "note to self: X" → create_task with due_date:today, HIGH, confirm:false
-    "add task X for tomorrow/friday/next monday" → create_task with resolved due_date, HIGH, confirm:false
-    DATE RESOLUTION — always use the exact dates from context:
-      "today" → use the Today date verbatim from context (e.g. 2026-03-07)
-      "tomorrow" → use the Tomorrow date verbatim from context (e.g. 2026-03-08) — NEVER use Today's date for a "tomorrow" task
-      "friday", "next monday", etc. → compute from the Today date in context
-
-  BULK TASK CREATION — use create_tasks_bulk when the message contains a numbered or bulleted list of 2+ items to add:
-    "add the following tasks:\n1. X\n2. Y\n3. Z" → create_tasks_bulk with tasks array, HIGH, confirm:false
-    "add tasks:\n- Build feature\n- Write tests\n- Deploy" → create_tasks_bulk, HIGH, confirm:false
-    Parse each line item as a separate task. Omit empty lines.
-    DEFAULT DUE DATE FOR EACH ITEM: set due_date to today (Today date from context) unless a specific date is mentioned for that item.
-    NEVER map a multi-item list to a single create_task — use create_tasks_bulk.
-
-  "move task X to friday" → move_task_date, HIGH, confirm:false
-  "daily debrief", "debrief" → daily_debrief, HIGH, confirm:false
-  "weekly review", "sunday review", "show my weekly review", "show review", "review this week" → weekly_review, HIGH, confirm:false
-  "undo" → undo_last, HIGH, confirm:false
-  "add idea X" (explicit command) → app_action add_idea, HIGH — distinct from capture_candidate
-
-  IDEA PIPELINE — set next step or promote idea to project:
-    "set next step for idea 2 to call John" → set_idea_next_step position:2 next_step:"call John", HIGH, confirm:false
-    "make idea 3 actionable, next step: write proposal" → set_idea_next_step position:3 next_step:"write proposal", HIGH, confirm:false
-    "promote idea 2 to project", "make idea 3 a project" → promote_idea_to_project position:2, HIGH, confirm:true
-    "set next step for [idea content] to X" → set_idea_next_step idea_content:"[idea content]" next_step:"X", HIGH, confirm:false
-    Use position when user references a numbered idea from the last shown list.
-    Use idea_content for fuzzy name matching when no numbered list was shown.
-
-assistant_answer — use when the user is asking a question or wants help thinking:
-  "how's the weather in X?" → needs_tool:"weather", tool_params:{"location":"X","date":"today"}, leave answer null
-  "what's the weather like tomorrow in X?" → needs_tool:"weather", tool_params:{"location":"X","date":"tomorrow"}, leave answer null
-  IMPORTANT: when needs_tool is set, always leave "answer" null. Never fabricate or roleplay a tool response.
-  If the location was mentioned in recent conversation (shown above), reuse it — do not ask again.
-  "what should I focus on today?" → use task + journal context to give a thoughtful answer
-  "help me think through X", "pros and cons of X" → conversational answer
-  "what are my goals?" → answer from context
-  "what do I need to do today?" → answer from task context (you can list them conversationally)
-  NEVER show rigid command lists in answer — speak naturally
-
-capture_candidate — use when something is said casually that sounds worth saving:
-  "X could be cool", "X would be interesting" → idea, MEDIUM, confirm:true
-  "i had an idea about X" → idea, HIGH, confirm:true
-  "nice win today: X", "great win: X" → win, HIGH, confirm:true
-  "we should X" → idea or goal depending on scope, MEDIUM, confirm:true
-  "i noticed that X", "i've been thinking about X" → thought, MEDIUM, confirm:true
-  Distinguish from app_action: "add idea X" is app_action, "X could be cool" is capture_candidate
-
-day_plan — use when the user is performing a direct action on their day plan.
-  The decisive question: "Is the user doing something to the plan — viewing it, changing it, logging into it?"
-
-  VALID day_plan triggers (the user is performing an action):
-    "show my plan", "what's my agenda", "day plan" (bare — probably wants to view it) → day_plan HIGH
-    "redo my day plan", "rebuild the plan", "replan from here", "redo the rest of today" → day_plan HIGH
-    "move lunch to 1pm", "remove padel from my plan", "skip the standup today" → day_plan HIGH
-    "wake at 7:30", "change wake to 8am" → day_plan HIGH
-    "win: hit inbox zero", "log win: shipped feature" → day_plan HIGH (standalone win log)
-    "set MIT: finish proposal", "MIT: X", "k1: Y", "k2: Z" → day_plan HIGH
-    "make the day plan from here on, I just finished X" → day_plan HIGH
-    "can you help me with my day plan?" → day_plan MEDIUM, follow_up_question: "Yes — do you want to view it, edit it, or redo the rest of today?"
-
-  Route to assistant_answer instead (the user is asking a question, not performing an action):
-    "am I able to edit my day plan?" → assistant_answer (question about capability)
-    "how do I edit my day plan?" → assistant_answer (how-to question)
-    "what can I do with my day plan?" → assistant_answer (question about features)
-    "does the day plan update automatically?" → assistant_answer (factual question)
-
-  Route to capture/app_action instead (schedule words appear but intent is to save content):
-    "add idea: Advanced tea filter system ... Day Plan – Sunday ..." → app_action (the content is an idea)
-    "my day plan felt off today — note this for review" → capture_candidate or app_action
-    "article about day planning methods" → app_action
-
-  When the intent is genuinely unclear, prefer assistant_answer or capture with confidence "medium" and
-  set follow_up_question. Do not guess day_plan.
-
-  Return for day_plan:
-  {
-    "route_type": "day_plan",
-    "confidence": "high"|"medium"|"low",
-    "ambiguities": [],
-    "follow_up_question": null | "string — short clarifying question when confidence is medium/low"
-  }
-
-  IMPORTANT: day_plan takes priority over app_action for standalone wins and priorities.
-    "win: X" (standalone) → day_plan (not capture_candidate or add_win)
-    "set MIT: X" → day_plan (not app_action)
-  NEVER return day_plan for: task management, ideas, thoughts, resources, general chat, questions
-    about how the plan works, or any message where the user is not performing a plan action.
-
-casual — greetings, chitchat, very short exchanges:
-  "hey", "yo", "hi", "how are you", "what's up" → casual, keep reply short and warm
-  NEVER show command lists for casual messages
-
-  PREFERENCE OR FORMATTING CHANGE REQUESTS — user asks to change how the bot behaves or formats output:
-    "from now on always show dates without timezone", "stop showing timestamps", "always respond in Dutch",
-    "change the way you format tasks", "remember to use short dates from now on"
-    → casual, reply MUST be truthful: acknowledge the preference, then state clearly that preferences
-       are not persisted between sessions and cannot be applied system-wide from chat.
-    NEVER reply as if a system-level change was applied. Example truthful reply:
-    "Noted — I'll aim for that in this conversation. Just so you know, I don't have persistent settings,
-     so this preference won't carry over to future sessions."
-    Do NOT say "Done, I've updated my settings" or "I'll always do that from now on."
-
-General rules:
-  Never use "request malformed", "I didn't understand that. Try:", or similar robotic phrasing
-  Numbered task references (e.g. "1", "2") in completion/move commands refer to positional order in TODAY list from context
-  Use full UUID from context for task IDs
-  Resolve relative dates (today, tomorrow, Friday) using Today date from context
-  Reuse location/context from recent conversation when available — do not ask redundant follow-up questions`;
 
 const DRAFT_SYSTEM_PROMPT = `You are a personal AI OS assistant. Parse user messages and return a structured interpretation draft.
 
@@ -401,67 +179,6 @@ export async function interpretWithDraft(
   }
 }
 
-export async function classifyAndRespond(
-  userMessage: string,
-  context: ContextPack,
-  history: Array<{ role: 'user' | 'bot'; text: string }> = []
-): Promise<ClassifiedMessage> {
-  const contextStr = contextPackToString(context);
-  const historySection = history.length > 0
-    ? `Recent conversation:\n${history.map(m => `${m.role === 'bot' ? 'assistant' : 'user'}: ${m.text}`).join('\n')}\n\n`
-    : '';
-
-  let response: Awaited<ReturnType<typeof client.messages.create>>;
-  try {
-    response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: CLASSIFIER_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `${historySection}Context:\n${contextStr}\n\nMessage: ${userMessage}`,
-        },
-      ],
-    });
-  } catch (apiErr) {
-    const apiMsg = apiErr instanceof Error ? apiErr.message : String(apiErr);
-    const apiStatus = (apiErr as Record<string, unknown>)?.status;
-    console.error('[claude] classifyAndRespond API error | status:', apiStatus ?? 'none', '| message:', apiMsg);
-    // Return a safe fallback so the error never reaches the outer bot catch
-    if (String(apiStatus) === '429' || apiMsg.includes('rate') || apiMsg.includes('529')) {
-      return { route_type: 'casual', reply: "I'm a bit busy right now — give me a few seconds and try again.", confidence: 'low', ambiguities: [] };
-    }
-    if (String(apiStatus) === '401' || apiMsg.toLowerCase().includes('api key') || apiMsg.toLowerCase().includes('authentication')) {
-      return { route_type: 'casual', reply: "I have a configuration problem on my end. Please let the admin know.", confidence: 'low', ambiguities: [] };
-    }
-    return { route_type: 'casual', reply: "I couldn't process that right now — please try again in a moment.", confidence: 'low', ambiguities: [] };
-  }
-
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
-
-  try {
-    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    const msg = JSON.parse(cleaned) as ClassifiedMessage;
-
-    // Guarantee intent.data exists when route is app_action
-    if (msg.route_type === 'app_action' && msg.intent && !msg.intent.data) {
-      (msg.intent as unknown as Record<string, unknown>).data = {};
-    }
-    if (!Array.isArray(msg.ambiguities)) {
-      msg.ambiguities = [];
-    }
-    return msg;
-  } catch {
-    // Parse failure → safe casual fallback so the user always gets a response
-    return {
-      route_type: 'casual',
-      reply: "Sorry, I lost my train of thought there — could you say that again?",
-      confidence: 'low',
-      ambiguities: ['Failed to parse AI response'],
-    };
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Debrief response parser — exported for testing
@@ -710,151 +427,6 @@ User reply: ${userReply}`;
   return result.intent;
 }
 
-export async function interpretDayPlanEdit(
-  userMessage: string,
-  schedule: Array<{ time: string; title: string; type: string; duration_min: number }>,
-  calendarEvents: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }>,
-  planDate: string,
-  tomorrowDate?: string
-): Promise<DayPlanMutation> {
-  // Format schedule with embedded event IDs so Claude can resolve time references
-  const scheduleText = schedule.map((b) => {
-    const eventMatch = calendarEvents.find((e) => e.title === b.title);
-    const idTag = eventMatch ? ` [event_id:${eventMatch.id}]` : '';
-    return `  ${b.time} ${b.title}${idTag} (${b.duration_min}min, type:${b.type})`;
-  }).join('\n');
-
-  const eventsText = calendarEvents
-    .filter((e) => !e.allDay)
-    .map((e) => {
-      const startStr = e.start.slice(11, 16);
-      const endStr = e.end.slice(11, 16);
-      return `  - ${e.title} [id:${e.id}] ${startStr}–${endStr}`;
-    }).join('\n') || '  (none)';
-
-  const tomorrowNote = tomorrowDate ? `Tomorrow's date: ${tomorrowDate}` : '';
-
-  const prompt = `Day plan for ${planDate}:
-${scheduleText}
-
-Calendar events available for removal:
-${eventsText}
-
-${tomorrowNote}
-
-Edit request: "${userMessage}"
-
-GUARD: If this message is not clearly about the day plan, schedule, wake time, wins, or priorities — return { "type": "unknown" } immediately. Do not default to "show". When uncertain between show and unknown, use "unknown".
-
-Return ONE JSON mutation object. Choose the type that best matches:
-
-{ "type": "show" }
-  → Use when the user wants to VIEW their current plan.
-  → Valid: "show my plan", "show day plan", "show my agenda", "what's my schedule today",
-    "show today's plan", "let me see my plan", "show tomorrow's plan"
-  → Also valid: bare "day plan" with no other context (they're probably asking to see it)
-  → INVALID — do NOT return show for:
-    "am I able to edit my day plan?" → plan_question (this is a question, not a view request)
-    "how do I edit my day plan?" → plan_question (how-to question)
-    "can you help me with my day plan?" → plan_question (help request needing clarification)
-    "save this as a thought" → unknown
-    "hey" / "hi" / general chat → unknown
-    any question starting with "how", "can I", "am I able to", "what can" → plan_question, not show
-
-{ "type": "remove_event", "event_id": "<exact-id>", "event_title": "<title>" }
-  → use when removing a calendar event/meeting/call from the plan
-  → find the event by time reference ("8am call" → the event starting at 08:xx) or title match
-  → event_id must be an exact id from the calendar events list above
-
-{ "type": "change_wake_time", "new_time": "HH:MM" }
-  → use when user wants to change wake time ("wake at 7:30", "change wake to 8am")
-
-{ "type": "move_block", "block_title": "<exact title>", "new_start": "HH:MM" }
-  → use when moving a block to a different time ("move lunch to 1pm", "make X earlier/later")
-  → block_title must match exactly a title in the schedule above
-
-{ "type": "remove_block", "block_title": "<exact title>" }
-  → use when removing a task block from today ("push X to tomorrow", "skip X today", "shorten/remove X")
-  → use for non-calendar blocks only (tasks, lunch, breaks)
-  → block_title must match exactly a title in the schedule above
-
-{ "type": "regenerate" }
-  → use when user wants to REBUILD or REDO the whole plan
-  → Valid: "redo my day plan", "rebuild my plan", "regenerate plan", "make a new plan",
-    "redo the plan from here", "plan from now", "replan my day", "make the day plan from here on",
-    "redo my day from here", "replan from here", "redo the rest of my day",
-    "I just finished X, make a new plan from here"
-
-{ "type": "log_win", "win_content": "<win description>" }
-  → use when user logs a win or accomplishment
-  → triggers: "win: X", "add win: X", "new win: X"
-  → DO NOT use for "finished X" or "completed X" alone — only use win-specific phrasing
-
-{ "type": "set_mit", "mit_value": "<task title>", "target_date": "YYYY-MM-DD" }
-  → use when user sets their Most Important Task
-  → triggers: "set MIT: X", "MIT: X", "MIT for today: X", "MIT for tomorrow: X"
-  → target_date: use planDate (${planDate}) unless user says "tomorrow" (use ${tomorrowDate ?? planDate})
-
-{ "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
-  → use when user sets their K1 priority; same target_date rules as set_mit
-
-{ "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
-  → use when user sets their K2 priority; same target_date rules as set_mit
-
-{ "type": "plan_question", "answer_text": "<direct, helpful answer>" }
-  → Use when the user is asking a QUESTION about the day plan rather than performing an action.
-  → "am I able to edit my day plan?" → answer_text: "Yes — you can move blocks, remove events, change your wake time, or redo the whole plan. Try: 'move lunch to 1pm', 'remove standup from my plan', or 'redo my day from here'."
-  → "how do I edit my day plan?" → answer_text explaining the available editing commands
-  → "can you help me with my day plan?" → answer_text: "Yes — do you want to view it, edit a block, or redo the rest of today?"
-  → "what can I do with my day plan?" → answer_text listing capabilities
-  → Different from "unknown": plan_question is a real question deserving an answer; unknown is unrecognized input
-
-{ "type": "unknown", "message": "<brief reason>" }
-  → DEFAULT for anything not clearly matching the above types.
-  → Use for: task management, ideas, thoughts, resources, general chat, weather,
-    anything unrelated to the day plan schedule or the mutation types listed above.
-  → "unknown" is correct and safe — callers will route it to the general assistant.
-
-Rules:
-- Parse times: "1pm"→"13:00", "7:30am"→"07:30", "noon"→"12:00"
-- "earlier" without a specific time → subtract 30 min from current time
-- "later" without a specific time → add 30 min to current time
-- Calendar events (type:event in schedule) should use remove_event, not remove_block
-- Output raw JSON only — no markdown, no prose`;
-
-  try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 256,
-      system: 'You are a day plan mutation parser. Output only raw JSON. Never add prose or markdown fences.',
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    const mutation = JSON.parse(cleaned) as DayPlanMutation;
-    if (!mutation.type) throw new Error('no type field');
-
-    // Debug logging
-    const details = [
-      mutation.event_id ? `event_id:${mutation.event_id}` : '',
-      mutation.event_title ? `event_title:"${mutation.event_title}"` : '',
-      mutation.block_title ? `block:"${mutation.block_title}"` : '',
-      mutation.win_content ? `win:"${mutation.win_content}"` : '',
-      mutation.mit_value ? `mit:"${mutation.mit_value}"` : '',
-      mutation.k1_value ? `k1:"${mutation.k1_value}"` : '',
-      mutation.k2_value ? `k2:"${mutation.k2_value}"` : '',
-      mutation.target_date ? `target:${mutation.target_date}` : '',
-      mutation.type === 'regenerate' ? '(will trigger full regeneration)' : '',
-    ].filter(Boolean).join(' ');
-    console.log(`[interpretDayPlanEdit] mutation:${mutation.type}${details ? ` | ${details}` : ''}`);
-
-    return mutation;
-  } catch (err) {
-    console.error('[interpretDayPlanEdit] parse error:', err instanceof Error ? err.message : err);
-    return { type: 'unknown', message: 'Could not parse edit request.' };
-  }
-}
 
 /** Short month-day formatter — kept inline to avoid importing executor.ts */
 function fmtShortDate(d: string | null | undefined): string {
@@ -930,4 +502,296 @@ export async function confirmDebriefSummary(
 
   lines.push('\nReply "yes" to confirm or correct me.');
   return lines.join('\n');
+}
+
+// ─── Unified Intent Interpreter ───────────────────────────────────────────────
+
+const UNIFIED_SYSTEM_PROMPT = `You are a personal assistant in a Telegram bot. A user has sent you a message.
+Your job: understand what the user actually wants to accomplish and return a structured JSON response.
+
+Always respond with a single JSON object. No prose outside the JSON.
+
+━━━ Intent types ━━━
+
+Choose the type that best describes what the user actually wants to accomplish:
+
+  day_plan_mutation  — The user is directly performing an operation on their schedule: viewing it,
+                       modifying individual elements, or rebuilding it entirely. Their goal is to
+                       change or inspect the current state of the plan.
+
+  app_action         — The user is explicitly commanding the system to create, list, complete, or
+                       update structured data: tasks, ideas, thoughts, wins, goals, or resources.
+
+  capture            — The user mentions something worth saving in a conversational way, without
+                       explicitly commanding a save. They are sharing an observation, not giving
+                       an instruction.
+
+  answer             — The user wants information, explanation, or understanding. Their goal is to
+                       learn something or receive a response — not to perform an operation. This
+                       covers questions about how things work, what is possible, requests for advice,
+                       factual queries, and anything where the output is a human-readable response
+                       rather than a system action.
+
+  casual             — Greeting, chitchat, a brief social exchange with no actionable intent.
+
+  clarify            — The user's goal genuinely cannot be determined from the message. Use only
+                       when two or more meaningfully different interpretations are equally plausible.
+                       When one interpretation is clearly more likely, choose it with appropriate
+                       confidence rather than defaulting to clarify.
+
+━━━ Disambiguation ━━━
+
+The central question: what does the user want to ACCOMPLISH?
+
+Performing an operation on the schedule → day_plan_mutation
+Explicitly managing structured data → app_action
+Sharing something conversationally → capture
+Seeking information or understanding → answer
+Brief social exchange → casual
+Genuinely ambiguous goal → clarify
+
+When a message contains structured-looking content (dates, times, titles), consider whether the user
+is operating on the schedule or saving that content as data. A message whose primary verb is saving
+or adding (e.g. save, add, log, note) is saving content regardless of what the content contains.
+
+When a message is about the schedule in an informational way — asking what it contains, how it works,
+what operations are available, or whether something is possible — the user's goal is understanding,
+not action. Return answer.
+
+When a message directly performs a schedule operation — viewing, moving, removing, rebuilding
+elements — return day_plan_mutation.
+
+Reserve clarify for genuine ambiguity where no single interpretation is clearly dominant.
+
+━━━ JSON schemas ━━━
+
+FOR day_plan_mutation:
+{
+  "type": "day_plan_mutation",
+  "mutation": { <one of the Day Plan Mutation objects below> }
+}
+
+FOR app_action:
+{
+  "type": "app_action",
+  "intent": { <one of the App Intent objects below> },
+  "confirm_needed": false,
+  "confidence": "high" | "medium" | "low",
+  "user_facing_summary": "friendly natural description of what you will do",
+  "follow_up_question": "..."   // only when confidence is medium or low
+}
+
+FOR capture:
+{
+  "type": "capture",
+  "capture_type": "idea" | "thought" | "win" | "goal" | "resource",
+  "content": "cleaned content to save (no labels, no metadata)",
+  "confirm_question": "natural confirmation e.g. 'That sounds like an idea — want me to save it?'"
+}
+
+FOR answer:
+{
+  "type": "answer",
+  "text": "complete conversational answer"
+}
+or when live external data is needed:
+{
+  "type": "answer",
+  "text": null,
+  "needs_tool": "weather",
+  "tool_params": { "location": "...", "date": "today" }
+}
+When needs_tool is set, always set text to null — never fabricate the tool response.
+
+FOR casual:
+{ "type": "casual", "reply": "short natural response" }
+
+FOR clarify:
+{ "type": "clarify", "question": "one short clarifying question" }
+
+━━━ Day Plan Mutation types ━━━
+
+{ "type": "show" }
+  → The user wants to see the schedule right now.
+
+{ "type": "remove_event", "event_id": "<exact id from calendar>", "event_title": "<title>" }
+  → Remove a calendar event from the plan.
+  → event_id must be an exact id from the calendar events list above.
+  → Calendar events have type:event in the schedule; use remove_block for everything else.
+
+{ "type": "change_wake_time", "new_time": "HH:MM" }
+  → The user wants to change the time their day begins.
+
+{ "type": "move_block", "block_title": "<exact title from schedule>", "new_start": "HH:MM" }
+  → Move an existing block to a different time.
+  → block_title must match a title in the schedule above (case-insensitive).
+  → "earlier" without a time → subtract 30 min; "later" without a time → add 30 min.
+
+{ "type": "remove_block", "block_title": "<exact title from schedule>" }
+  → Remove a non-calendar block (task, break, free time) from the schedule.
+  → block_title must match a title in the schedule above.
+
+{ "type": "regenerate" }
+  → Rebuild the entire plan from scratch, fetching fresh calendar state.
+  → Use when the user wants a completely new plan, not a single targeted edit.
+
+{ "type": "log_win", "win_content": "<win description>" }
+  → Record an accomplishment against the current plan.
+
+{ "type": "set_mit", "mit_value": "<task title>", "target_date": "YYYY-MM-DD" }
+  → Set the Most Important Task for the plan date.
+  → target_date defaults to Today unless the user specifies tomorrow.
+
+{ "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
+{ "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
+
+{ "type": "add_block", "block_title": "<title>", "new_start": "HH:MM", "duration_min": <minutes> }
+  → Add a new block to the schedule at a specified time.
+  → default duration_min: 30 if not specified.
+
+{ "type": "rename_block", "block_title": "<current exact title>", "new_title": "<new title>" }
+  → Rename an existing block. block_title must match a title in the schedule above.
+
+{ "type": "resize_block", "block_title": "<exact title>", "duration_min": <new minutes> }
+  → Change a block's duration. block_title must match a title in the schedule above.
+
+{ "type": "unknown", "message": "<brief reason>" }
+  → Default when nothing above fits; callers route this to the general assistant.
+
+Time parsing: "1pm"→"13:00", "7:30am"→"07:30", "noon"→"12:00", "3:30pm"→"15:30"
+Calendar events (type:event in schedule) → use remove_event, not remove_block.
+
+━━━ App Intent types ━━━
+
+create_task:         { "intent": "create_task",         "data": { "title": "...", "due_date": "YYYY-MM-DD" } }
+create_tasks_bulk:   { "intent": "create_tasks_bulk",   "data": { "tasks": [{ "title": "...", "due_date": "YYYY-MM-DD" }] } }
+list_tasks:          { "intent": "list_tasks",          "data": { "filter": "overdue"|"today"|"tomorrow"|"upcoming"|"all" } }
+list_ideas:          { "intent": "list_ideas",          "data": {} }
+list_thoughts:       { "intent": "list_thoughts",       "data": {} }
+list_resources:      { "intent": "list_resources",      "data": {} }
+list_wins:           { "intent": "list_wins",           "data": {} }
+list_goals:          { "intent": "list_goals",          "data": { "filter": "active"|"all"|"quarter", "quarter": "YYYY-QN" } }
+complete_task:       { "intent": "complete_task",       "data": { "task_id": "UUID", "task_title": "..." } }
+complete_tasks_bulk: { "intent": "complete_tasks_bulk", "data": { "positions": [1, 2] } }
+move_task_date:      { "intent": "move_task_date",      "data": { "task_id": "UUID", "task_title": "...", "new_due_date": "YYYY-MM-DD" } }
+move_tasks_bulk:     { "intent": "move_tasks_bulk",     "data": { "positions": [1, 2], "new_due_date": "YYYY-MM-DD" } }
+group_action:        { "intent": "group_action",        "data": { "action": "complete"|"move_date", "group": "overdue"|"today"|"all", "new_due_date": "YYYY-MM-DD" } }
+add_thought:         { "intent": "add_thought",         "data": { "content": "..." } }
+add_idea:            { "intent": "add_idea",            "data": { "content": "...", "actionability": "..." } }
+add_win:             { "intent": "add_win",             "data": { "content": "...", "entry_date": "YYYY-MM-DD" } }
+add_goal:            { "intent": "add_goal",            "data": { "title": "...", "description": "...", "target_date": "YYYY-MM-DD" } }
+create_resource:     { "intent": "create_resource",     "data": { "title": "...", "content_or_url": "...", "type": "..." } }
+set_idea_next_step:  { "intent": "set_idea_next_step",  "data": { "position": 2, "idea_content": "...", "next_step": "..." } }
+promote_idea_to_project: { "intent": "promote_idea_to_project", "data": { "position": 3, "idea_content": "..." } }
+daily_debrief:       { "intent": "daily_debrief",       "data": {} }
+weekly_review:       { "intent": "weekly_review",       "data": {} }
+undo_last:           { "intent": "undo_last",           "data": {} }
+unknown:             { "intent": "unknown",             "data": { "message": "..." } }
+
+App intent rules:
+- Default due_date for new tasks: Today date from context (unless user specifies another date)
+- "today" → Today date from context; "tomorrow" → Tomorrow date; resolve relative dates from context
+- Goal vs Task: goal = aspiration/outcome over weeks/months; task = single actionable step
+- Bulk task list (2+ numbered/bulleted items) → create_tasks_bulk
+- Group operations (overdue, all today) → confirm_needed:true
+- Positional task refs (e.g. "mark 1 done") → use positions array; resolve UUIDs from context task list
+- Numbered idea refs (e.g. "idea 2") → use position in set_idea_next_step/promote_idea_to_project
+- Use full UUIDs from context; resolve relative dates from Today/Tomorrow in context
+
+Confidence rules:
+- high: clear command, one obvious interpretation → execute immediately
+- medium with low stakes: execute; set follow_up_question if key detail is inferred
+- medium with high stakes (destructive/bulk): confirm_needed:true
+- low: genuinely ambiguous → include follow_up_question; do NOT execute
+
+Do NOT show robotic phrases like "request malformed". Speak naturally.`;
+
+export async function interpretUserIntent(
+  userMessage: string,
+  context: ContextPack,
+  history: Array<{ role: 'user' | 'bot'; text: string }>,
+  schedule: Array<{ time: string; title: string; type: string; duration_min: number }>,
+  calendarEvents: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }>,
+  planDate: string,
+  tomorrowDate: string,
+): Promise<UserIntent> {
+  const contextStr = contextPackToString(context);
+
+  const historySection = history.length > 0
+    ? `Recent conversation:\n${history.map(m => `${m.role === 'bot' ? 'assistant' : 'user'}: ${m.text}`).join('\n')}\n\n`
+    : '';
+
+  const scheduleText = schedule.length > 0
+    ? schedule.map((b) => {
+        const eventMatch = calendarEvents.find((e) => e.title === b.title);
+        const idTag = eventMatch ? ` [event_id:${eventMatch.id}]` : '';
+        return `  ${b.time} ${b.title}${idTag} (${b.duration_min}min, type:${b.type})`;
+      }).join('\n')
+    : '  (no plan saved)';
+
+  const eventsText = calendarEvents
+    .filter((e) => !e.allDay)
+    .map((e) => {
+      const startStr = e.start.slice(11, 16);
+      const endStr = e.end.slice(11, 16);
+      return `  - ${e.title} [id:${e.id}] ${startStr}–${endStr}`;
+    }).join('\n') || '  (none)';
+
+  const userContent = `${historySection}Context:\n${contextStr}
+
+Day plan for ${planDate}:
+${scheduleText}
+
+Calendar events (${planDate}):
+${eventsText}
+
+Today: ${planDate}
+Tomorrow: ${tomorrowDate}
+
+Message: ${userMessage}`;
+
+  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1024,
+      system: UNIFIED_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userContent }],
+    });
+  } catch (apiErr) {
+    const apiMsg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+    const apiStatus = (apiErr as Record<string, unknown>)?.status;
+    console.error('[claude] interpretUserIntent API error | status:', apiStatus ?? 'none', '| message:', apiMsg);
+    if (String(apiStatus) === '429' || apiMsg.includes('rate') || apiMsg.includes('529')) {
+      return { type: 'casual', reply: "I'm a bit busy right now — give me a few seconds and try again." };
+    }
+    if (String(apiStatus) === '401' || apiMsg.toLowerCase().includes('api key')) {
+      return { type: 'casual', reply: "I have a configuration problem on my end. Please let the admin know." };
+    }
+    return { type: 'casual', reply: "I couldn't process that right now — please try again in a moment." };
+  }
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  try {
+    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+    const parsed = JSON.parse(cleaned) as UserIntent;
+
+    // Guarantee intent.data exists for app_action
+    if (parsed.type === 'app_action' && parsed.intent && !(parsed.intent as unknown as Record<string, unknown>).data) {
+      (parsed.intent as unknown as Record<string, unknown>).data = {};
+    }
+
+    const details = parsed.type === 'day_plan_mutation'
+      ? `mutation:${parsed.mutation.type}`
+      : parsed.type === 'app_action'
+        ? `intent:${parsed.intent.intent} confidence:${parsed.confidence}`
+        : parsed.type;
+    console.log(`[interpretUserIntent] type:${parsed.type} | ${details}`);
+
+    return parsed;
+  } catch {
+    console.error('[interpretUserIntent] parse error — raw:', text.slice(0, 200));
+    return { type: 'casual', reply: "Sorry, I lost my train of thought — could you say that again?" };
+  }
 }

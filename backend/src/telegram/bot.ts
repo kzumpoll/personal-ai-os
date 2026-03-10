@@ -1,8 +1,8 @@
 import { Telegraf } from 'telegraf';
 import { Express } from 'express';
 import { buildContextPack, determineDebriefDates } from '../ai/context';
-import { classifyAndRespond, interpretDebriefReply, confirmDebriefSummary, interpretDayPlanEdit, DayPlanMutation } from '../ai/claude';
-import { routeClassified, captureToIntent } from '../ai/intents';
+import { interpretUserIntent, interpretDebriefReply, confirmDebriefSummary, DayPlanMutation } from '../ai/claude';
+import { captureToIntent } from '../ai/intents';
 import { executeIntent, fmtDate } from '../mutations/executor';
 import {
   getSession,
@@ -18,7 +18,7 @@ import {
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
 import { getTasksDueOnOrBefore, getTasksForDate } from '../db/queries/tasks';
 import { executeToolCall } from '../tools/weather';
-import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, IgnoredEventSnapshot } from '../db/queries/day_plans';
+import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, IgnoredEventSnapshot, ScheduleBlock } from '../db/queries/day_plans';
 import { generateDayPlan, formatAgendaForBot, diffDayPlans } from '../services/dayplan';
 import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
@@ -296,6 +296,90 @@ async function applyDayPlanMutation(
       break;
     }
 
+    case 'add_block': {
+      const title = mutation.block_title ?? '';
+      const startTime = mutation.new_start;
+      const dur = mutation.duration_min ?? 30;
+      if (!title || !startTime) {
+        await reply('Please specify a title and time — e.g. "add a 30 min walk at 5pm".');
+        return;
+      }
+      const newBlock: ScheduleBlock = { time: startTime, title, type: 'task', duration_min: dur };
+      const newSchedule = [...plan.schedule, newBlock].sort((a, b) => {
+        if (a.type === 'wake') return -1;
+        if (b.type === 'wake') return 1;
+        return a.time.localeCompare(b.time);
+      });
+      const diff = diffDayPlans(plan.schedule, plan.overflow, newSchedule, plan.overflow, plan.wake_time, plan.wake_time);
+      await upsertDayPlan({
+        plan_date: planDate,
+        wake_time: plan.wake_time ?? undefined,
+        work_start: plan.work_start ?? undefined,
+        schedule: newSchedule,
+        overflow: plan.overflow,
+        ignored_event_ids: plan.ignored_event_ids,
+        ignored_event_snapshots: plan.ignored_event_snapshots,
+      });
+      await reply(formatPlanReply(`"${title}" added at ${startTime}.`, diff));
+      break;
+    }
+
+    case 'rename_block': {
+      const title = mutation.block_title ?? '';
+      const newTitle = mutation.new_title ?? '';
+      if (!title || !newTitle) {
+        await reply('Please specify the current block name and the new name.');
+        return;
+      }
+      const idx = plan.schedule.findIndex((b) => b.title.toLowerCase() === title.toLowerCase());
+      if (idx === -1) {
+        await reply(`Couldn't find "${title}" in the current plan. Try "show my plan" to see block names.`);
+        return;
+      }
+      const renamedSchedule = [...plan.schedule];
+      renamedSchedule[idx] = { ...renamedSchedule[idx], title: newTitle };
+      const diff = diffDayPlans(plan.schedule, plan.overflow, renamedSchedule, plan.overflow, plan.wake_time, plan.wake_time);
+      await upsertDayPlan({
+        plan_date: planDate,
+        wake_time: plan.wake_time ?? undefined,
+        work_start: plan.work_start ?? undefined,
+        schedule: renamedSchedule,
+        overflow: plan.overflow,
+        ignored_event_ids: plan.ignored_event_ids,
+        ignored_event_snapshots: plan.ignored_event_snapshots,
+      });
+      await reply(formatPlanReply(`"${title}" renamed to "${newTitle}".`, diff));
+      break;
+    }
+
+    case 'resize_block': {
+      const title = mutation.block_title ?? '';
+      const dur = mutation.duration_min;
+      if (!title || !dur) {
+        await reply('Please specify the block name and new duration — e.g. "make Clear Inbox 30 minutes".');
+        return;
+      }
+      const idx = plan.schedule.findIndex((b) => b.title.toLowerCase() === title.toLowerCase());
+      if (idx === -1) {
+        await reply(`Couldn't find "${title}" in the current plan. Try "show my plan" to see block names.`);
+        return;
+      }
+      const resizedSchedule = [...plan.schedule];
+      resizedSchedule[idx] = { ...resizedSchedule[idx], duration_min: dur };
+      const diff = diffDayPlans(plan.schedule, plan.overflow, resizedSchedule, plan.overflow, plan.wake_time, plan.wake_time);
+      await upsertDayPlan({
+        plan_date: planDate,
+        wake_time: plan.wake_time ?? undefined,
+        work_start: plan.work_start ?? undefined,
+        schedule: resizedSchedule,
+        overflow: plan.overflow,
+        ignored_event_ids: plan.ignored_event_ids,
+        ignored_event_snapshots: plan.ignored_event_snapshots,
+      });
+      await reply(formatPlanReply(`"${title}" resized to ${dur} min.`, diff));
+      break;
+    }
+
     case 'plan_question': {
       await reply(
         mutation.answer_text ??
@@ -474,14 +558,19 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
-  // --- Top-level classification (app_action / assistant_answer / capture_candidate / casual / day_plan) ---
-  // The main classifier decides the route. day_plan messages are then passed to
-  // interpretDayPlanEdit for fine-grained mutation parsing.
+  // --- Unified intent interpretation ---
+  // One LLM call determines what the user wants to do semantically.
+  // Dispatch is deterministic from the returned UserIntent type.
+
+  console.log('[bot] [v2] incoming message:', JSON.stringify(text.slice(0, 200)));
+
+  const planDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
+
   let ctx: Awaited<ReturnType<typeof buildContextPack>>;
   try {
     ctx = await buildContextPack();
   } catch (ctxErr) {
-    console.error('[bot] buildContextPack failed (DB issue?) — continuing with empty context:', ctxErr instanceof Error ? ctxErr.message : ctxErr);
+    console.error('[bot] buildContextPack failed — continuing with empty context:', ctxErr instanceof Error ? ctxErr.message : ctxErr);
     ctx = {
       today: new Date().toISOString().slice(0, 10),
       tomorrow: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
@@ -489,122 +578,120 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       todayJournal: null, calendarEvents: [],
     };
   }
-  console.log('[bot] classifying message for chat', chatId);
-  const classified = await classifyAndRespond(text, ctx, getHistory(chatId));
-  console.log('[bot] route_type:', classified.route_type, '| needs_tool:', classified.needs_tool ?? 'none');
 
-  // --- Day plan route: classifier decided this is about the schedule ---
-  if (classified.route_type === 'day_plan') {
-    // Confidence gate: low confidence or medium+follow_up → ask for clarification
-    const followUp = classified.follow_up_question;
-    if (
-      classified.confidence === 'low' ||
-      (classified.confidence === 'medium' && followUp)
-    ) {
-      await reply(followUp ?? "I'm not sure what you'd like to do with your plan. Try: \"show my plan\", \"redo my plan\", \"move lunch to 1pm\", or \"win: <what you finished>\".");
-      return;
-    }
-    const planCheckDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
-    let planForCheck: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
-    try {
-      planForCheck = await getDayPlanByDate(planCheckDate);
-    } catch (dpCheckErr) {
-      console.error('[bot] day plan check error:', dpCheckErr instanceof Error ? dpCheckErr.message : dpCheckErr);
-    }
-    const calendarEventsForPlan = planForCheck ? await getEventsForDate(planCheckDate) : [];
-    const scheduleForEdit = planForCheck?.schedule ?? [];
-    try {
-      const mutation = await interpretDayPlanEdit(text, scheduleForEdit, calendarEventsForPlan, planCheckDate, getLocalTomorrow());
-      console.log('[bot] day plan mutation:', mutation.type);
-      if (mutation.type !== 'unknown') {
-        const needsSchedule = (
-          mutation.type === 'show' ||
-          mutation.type === 'remove_event' ||
-          mutation.type === 'change_wake_time' ||
-          mutation.type === 'move_block' ||
-          mutation.type === 'remove_block' ||
-          mutation.type === 'regenerate'
-        );
-        // plan_question answers are self-contained — skip the "no plan saved" guard
-        if (mutation.type !== 'plan_question' && needsSchedule && (!planForCheck || planForCheck.schedule.length === 0)) {
-          await reply(`No day plan saved for ${planCheckDate}. Run your daily debrief with a Wake: HH:MM to generate one.`);
-          return;
-        }
-        await applyDayPlanMutation(planCheckDate, mutation, (planForCheck ?? {}) as NonNullable<typeof planForCheck>, calendarEventsForPlan, reply);
+  let plan: Awaited<ReturnType<typeof getDayPlanByDate>> | null = null;
+  let calendarEventsForPlan: Awaited<ReturnType<typeof getEventsForDate>> = [];
+  try {
+    plan = await getDayPlanByDate(planDate);
+    calendarEventsForPlan = await getEventsForDate(planDate);
+  } catch (planErr) {
+    console.error('[bot] plan/calendar fetch error:', planErr instanceof Error ? planErr.message : planErr);
+  }
+
+  console.log('[bot] interpreting intent for chat', chatId);
+  const intent = await interpretUserIntent(
+    text, ctx, getHistory(chatId),
+    plan?.schedule ?? [], calendarEventsForPlan, planDate, getLocalTomorrow()
+  );
+  console.log('[bot] [v2] interpreter result:', JSON.stringify(intent));
+
+  switch (intent.type) {
+    case 'day_plan_mutation': {
+      const mutation = intent.mutation;
+      console.log('[bot] [v2] dispatching: day_plan_mutation/', mutation.type);
+      const needsSchedule = (
+        mutation.type === 'show' ||
+        mutation.type === 'remove_event' ||
+        mutation.type === 'change_wake_time' ||
+        mutation.type === 'move_block' ||
+        mutation.type === 'remove_block' ||
+        mutation.type === 'regenerate' ||
+        mutation.type === 'add_block' ||
+        mutation.type === 'rename_block' ||
+        mutation.type === 'resize_block'
+      );
+      if (mutation.type !== 'plan_question' && mutation.type !== 'unknown' && needsSchedule && (!plan || plan.schedule.length === 0)) {
+        await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM to generate one.`);
         return;
       }
-      // Plan interpreter returned unknown — give a brief help response
-      await reply(`Not sure what to do with the plan. Try:\n• "show my plan"\n• "redo my day plan"\n• "move lunch to 1pm"\n• "wake at 7:30"\n• "win: <what you finished>"`);
-    } catch (dpEditErr) {
-      console.error('[bot] day plan edit error:', dpEditErr instanceof Error ? dpEditErr.message : dpEditErr);
-      await reply('Something went wrong with the day plan. Try "show my plan" or "redo my plan".');
+      if (mutation.type === 'unknown') {
+        await reply(mutation.message ?? `Not sure what to do with the plan. Try:\n• "show my plan"\n• "redo my day plan"\n• "move lunch to 1pm"\n• "wake at 7:30"\n• "win: <what you finished>"`);
+        return;
+      }
+      await applyDayPlanMutation(planDate, mutation, (plan ?? {}) as NonNullable<typeof plan>, calendarEventsForPlan, reply);
+      return;
     }
-    return;
-  }
 
-  // Execute tool calls BEFORE routing so the answer is real, not fabricated
-  if (classified.needs_tool && classified.route_type === 'assistant_answer') {
-    console.log('[bot] executing tool:', classified.needs_tool, JSON.stringify(classified.tool_params));
-    const toolResult = await executeToolCall(classified.needs_tool, classified.tool_params ?? {});
-    classified.answer = toolResult;
-    classified.needs_tool = undefined;
-  }
+    case 'answer': {
+      console.log('[bot] [v2] dispatching: answer', intent.needs_tool ? `(tool: ${intent.needs_tool})` : '');
+      if (intent.needs_tool) {
+        console.log('[bot] executing tool:', intent.needs_tool, JSON.stringify(intent.tool_params));
+        const toolResult = await executeToolCall(intent.needs_tool, intent.tool_params ?? {});
+        await reply(toolResult);
+      } else {
+        await reply(intent.text);
+      }
+      return;
+    }
 
-  const action = routeClassified(classified);
-  console.log('[bot] action:', action.action);
+    case 'casual':
+      console.log('[bot] [v2] dispatching: casual');
+      await reply(intent.reply);
+      return;
 
-  switch (action.action) {
-    case 'reply':
-      await reply(action.text);
-      break;
+    case 'clarify':
+      console.log('[bot] [v2] dispatching: clarify');
+      await reply(intent.question);
+      return;
 
-    case 'ask':
-      await reply(action.question);
-      break;
-
-    case 'confirm_capture':
+    case 'capture':
+      console.log('[bot] [v2] dispatching: capture/', intent.capture_type);
       setSession(chatId, {
         state: 'pending_capture',
-        captureType: action.captureType,
-        captureContent: action.captureContent,
+        captureType: intent.capture_type,
+        captureContent: intent.content,
       });
-      await reply(`${action.question}\n\nReply "yes" to save or "no" to discard.`);
-      break;
+      await reply(`${intent.confirm_question}\n\nReply "yes" to save or "no" to discard.`);
+      return;
 
-    case 'confirm_intent':
-      setSession(chatId, { state: 'pending_confirmation', pendingIntent: action.intent });
-      await reply(`${action.question}\n\nReply "yes" to confirm or "no" to cancel.`);
-      break;
+    case 'app_action': {
+      const appIntent = intent.intent;
+      console.log('[bot] [v2] dispatching: app_action/', appIntent.intent, 'confidence:', intent.confidence);
 
-    case 'execute': {
-      const intent = action.intent;
+      if (intent.confidence === 'low') {
+        await reply(intent.follow_up_question ?? 'Could you be more specific?');
+        return;
+      }
+
+      if (intent.confirm_needed) {
+        setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
+        await reply(`${intent.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
+        return;
+      }
 
       // Resolve single positional task reference from the last shown task list
-      if (intent.intent === 'complete_task' || intent.intent === 'move_task_date') {
+      if (appIntent.intent === 'complete_task' || appIntent.intent === 'move_task_date') {
         const pos = extractPositionalNumber(text);
         if (pos !== null) {
           const ref = getLastTaskList(chatId);
           if (ref && pos >= 1 && pos <= ref.taskIds.length) {
             console.log('[bot] resolving position', pos, 'from last task list scope:', ref.scope);
-            intent.data.task_id = ref.taskIds[pos - 1];
-            delete (intent.data as Record<string, unknown>).task_title;
+            appIntent.data.task_id = ref.taskIds[pos - 1];
+            delete (appIntent.data as Record<string, unknown>).task_title;
           } else if (!ref) {
-            console.log('[bot] positional ref', pos, 'but no task list stored — asking clarification');
             await reply('Could you be more specific? Try showing your tasks first (e.g. "show tasks"), then tell me which one to complete.');
             return;
           }
-          // pos out of bounds: let executor handle it via task_title fallback
         }
       }
 
-      // Resolve multiple positional refs for bulk complete / bulk move
-      if (intent.intent === 'complete_tasks_bulk' || intent.intent === 'move_tasks_bulk') {
-        const bulkData = intent.data as Record<string, unknown>;
+      // Resolve bulk positional refs
+      if (appIntent.intent === 'complete_tasks_bulk' || appIntent.intent === 'move_tasks_bulk') {
+        const bulkData = appIntent.data as Record<string, unknown>;
         const positions = bulkData.positions as number[] | undefined;
         if (positions && positions.length > 0) {
           const ref = getLastTaskList(chatId);
           if (!ref) {
-            console.log('[bot] bulk positional refs but no task list stored');
             await reply('Show your tasks first (e.g. "show tasks"), then tell me which numbers to act on.');
             return;
           }
@@ -621,9 +708,9 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         }
       }
 
-      // Resolve idea positional references for set_idea_next_step / promote_idea_to_project
-      if (intent.intent === 'set_idea_next_step' || intent.intent === 'promote_idea_to_project') {
-        const d = intent.data as Record<string, unknown>;
+      // Resolve idea positional refs
+      if (appIntent.intent === 'set_idea_next_step' || appIntent.intent === 'promote_idea_to_project') {
+        const d = appIntent.data as Record<string, unknown>;
         if (d.position && typeof d.position === 'number') {
           const ref = getLastIdeaList(chatId);
           if (!ref) {
@@ -632,50 +719,41 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
           }
           const pos = d.position as number;
           if (pos >= 1 && pos <= ref.ideaIds.length) {
-            console.log('[bot] resolving idea position', pos, 'from last idea list');
             d.idea_id = ref.ideaIds[pos - 1];
             delete d.position;
           }
         }
       }
 
-      console.log('[bot] executing intent:', intent.intent);
+      console.log('[bot] executing intent:', appIntent.intent);
 
-      if (intent.intent === 'daily_debrief') {
+      if (appIntent.intent === 'daily_debrief') {
         await startDebrief(chatId, reply);
-      } else if (intent.intent === 'weekly_review') {
+      } else if (appIntent.intent === 'weekly_review') {
         await handleReviewCommand(chatId, reply);
       } else {
         let result: Awaited<ReturnType<typeof executeIntent>>;
         try {
-          result = await executeIntent(intent);
+          result = await executeIntent(appIntent);
         } catch (execErr) {
           const execMsg = execErr instanceof Error ? execErr.message : String(execErr);
-          console.error('[bot] executeIntent threw for', intent.intent, ':', execMsg);
+          console.error('[bot] executeIntent threw for', appIntent.intent, ':', execMsg);
           await reply(`Couldn't complete that — ${execMsg.slice(0, 80)}. Please try again.`);
-          break;
+          return;
         }
 
-        // Store task list ref when a numbered list was shown
         if (
-          intent.intent === 'list_tasks' &&
-          result.success &&
-          result.data &&
-          typeof result.data === 'object' &&
-          'taskIds' in result.data
+          appIntent.intent === 'list_tasks' &&
+          result.success && result.data && typeof result.data === 'object' && 'taskIds' in result.data
         ) {
           const { taskIds, scope } = result.data as { taskIds: string[]; scope: string };
           setLastTaskList(chatId, scope ?? 'today', taskIds);
           console.log('[bot] stored task list ref: scope=', scope, 'count=', taskIds.length);
         }
 
-        // Store idea list ref when a numbered idea list was shown
         if (
-          intent.intent === 'list_ideas' &&
-          result.success &&
-          result.data &&
-          typeof result.data === 'object' &&
-          'ideaIds' in result.data
+          appIntent.intent === 'list_ideas' &&
+          result.success && result.data && typeof result.data === 'object' && 'ideaIds' in result.data
         ) {
           const { ideaIds } = result.data as { ideaIds: string[] };
           setLastIdeaList(chatId, ideaIds);
@@ -684,7 +762,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
         await reply(result.message);
       }
-      break;
+      return;
     }
   }
 }
