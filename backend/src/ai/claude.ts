@@ -5,7 +5,7 @@ import { ContextPack, contextPackToString } from './context';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface DayPlanMutation {
-  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'plan_question' | 'add_block' | 'rename_block' | 'resize_block' | 'unknown';
+  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'complete_mit' | 'complete_k1' | 'complete_k2' | 'plan_question' | 'add_block' | 'rename_block' | 'resize_block' | 'unknown';
   event_id?: string;       // for remove_event
   event_title?: string;    // for remove_event (display)
   new_time?: string;       // for change_wake_time (HH:MM)
@@ -644,6 +644,15 @@ FOR clarify:
 
 { "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
 { "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
+
+{ "type": "complete_mit" }
+  → Mark the MIT as done for today. The user has finished their most important task.
+
+{ "type": "complete_k1" }
+  → Mark K1 as done for today.
+
+{ "type": "complete_k2" }
+  → Mark K2 as done for today.
 
 { "type": "add_block", "block_title": "<title>", "new_start": "HH:MM", "duration_min": <minutes> }
   → Add a new block to the schedule at a specified time.

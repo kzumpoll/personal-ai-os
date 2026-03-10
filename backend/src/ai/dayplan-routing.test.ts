@@ -71,6 +71,9 @@ function mutationAction(mutation: DayPlanMutation): string {
     case 'set_mit':
     case 'set_k1':
     case 'set_k2': return 'set_priority';
+    case 'complete_mit':
+    case 'complete_k1':
+    case 'complete_k2': return 'complete_focus';
     case 'unknown': return 'unknown';
   }
 }

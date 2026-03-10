@@ -216,7 +216,8 @@ export function generateDayPlan(params: {
 export function formatAgendaForBot(
   schedule: ScheduleBlock[],
   overflow: string[],
-  planDate: string
+  planDate: string,
+  completions?: { mit_done?: boolean; k1_done?: boolean; k2_done?: boolean }
 ): string {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const parts = planDate.split('-').map(Number);
@@ -233,12 +234,22 @@ export function formatAgendaForBot(
     free: '⬜',
   };
 
-  const lines: string[] = [`Day Plan for ${dateLabel}: [BUILD v2]`];
+  const isDone = (type: string): boolean => {
+    if (type === 'mit') return completions?.mit_done ?? false;
+    if (type === 'k1')  return completions?.k1_done  ?? false;
+    if (type === 'k2')  return completions?.k2_done  ?? false;
+    return false;
+  };
+
+  const lines: string[] = [`Day Plan for ${dateLabel}:`];
   for (const block of schedule) {
+    const done = isDone(block.type);
+    const emoji = done ? '✅' : (typeEmoji[block.type] ?? '•');
+    const title = done ? `${block.title} ✓` : block.title;
     if (block.duration_min === 0) {
-      lines.push(`${block.time} ${typeEmoji[block.type] ?? '•'} ${block.title}`);
+      lines.push(`${block.time} ${emoji} ${title}`);
     } else {
-      lines.push(`${block.time} ${typeEmoji[block.type] ?? '•'} ${block.title} (${block.duration_min}min)`);
+      lines.push(`${block.time} ${emoji} ${title} (${block.duration_min}min)`);
     }
   }
 

@@ -200,8 +200,22 @@ export function formatEventsForBot(events: CalendarEvent[], date: string): strin
 
 function formatTime(iso: string): string {
   try {
+    const tz = process.env.USER_TZ;
     const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (tz) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+      const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+      return `${h}:${m}`;
+    }
+    // Fallback: slice the local-time part from the ISO string if it has an offset
+    // e.g. "2026-03-10T09:30:00+08:00" → "09:30"
+    return iso.slice(11, 16);
   } catch {
     return iso.slice(11, 16);
   }

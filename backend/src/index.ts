@@ -110,6 +110,15 @@ async function main() {
   console.log(`  env:  ${process.env.NODE_ENV ?? 'development'}`);
   console.log(`  port: ${PORT}`);
 
+  // Timezone — critical for day plan date boundaries and event times
+  const userTz = process.env.USER_TZ;
+  if (!userTz) {
+    console.warn('  tz:   WARNING — USER_TZ not set. Dates will use UTC. Set USER_TZ=Asia/Makassar for Bali.');
+  } else {
+    const { getLocalToday } = await import('./services/localdate');
+    console.log(`  tz:   USER_TZ=${userTz} | today=${getLocalToday()}`);
+  }
+
   // Required env var check
   const missing: string[] = [];
   if (!process.env.TELEGRAM_BOT_TOKEN) missing.push('TELEGRAM_BOT_TOKEN');

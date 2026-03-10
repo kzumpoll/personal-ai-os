@@ -18,7 +18,7 @@ import {
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
 import { getTasksDueOnOrBefore, getTasksForDate } from '../db/queries/tasks';
 import { executeToolCall } from '../tools/weather';
-import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, IgnoredEventSnapshot, ScheduleBlock } from '../db/queries/day_plans';
+import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, setFocusCompletion, IgnoredEventSnapshot, ScheduleBlock } from '../db/queries/day_plans';
 import { generateDayPlan, formatAgendaForBot, diffDayPlans } from '../services/dayplan';
 import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
@@ -110,7 +110,7 @@ async function regeneratePlanFor(
     ? diffDayPlans(existing.schedule, existing.overflow, schedule, overflow, existing.wake_time, wakeTime)
     : null;
 
-  await upsertDayPlan({
+  const saved = await upsertDayPlan({
     plan_date: planDate,
     wake_time: wakeTime,
     work_start,
@@ -120,7 +120,10 @@ async function regeneratePlanFor(
     ignored_event_snapshots: ignoredSnapshots,
   });
 
-  return { agenda: formatAgendaForBot(schedule, overflow, planDate), diff };
+  return {
+    agenda: formatAgendaForBot(schedule, overflow, planDate, saved),
+    diff,
+  };
 }
 
 /** Parse a time string like "7:30", "7am", "730", "07:30" → "07:30" or null */
@@ -164,7 +167,7 @@ async function applyDayPlanMutation(
       if (!p || !p.schedule.length) {
         await reply(`No day plan saved for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate one.`);
       } else {
-        await reply(formatAgendaForBot(p.schedule, p.overflow, planDate));
+        await reply(formatAgendaForBot(p.schedule, p.overflow, planDate, p));
       }
       break;
     }
@@ -246,6 +249,33 @@ async function applyDayPlanMutation(
     case 'regenerate': {
       const { agenda, diff } = await regeneratePlanFor(planDate);
       await reply(formatPlanReply('Plan regenerated.', diff, agenda));
+      break;
+    }
+
+    case 'complete_mit': {
+      await setFocusCompletion(planDate, 'mit_done', true);
+      const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
+      const updated = p ? { ...p, mit_done: true } : undefined;
+      const agenda = p ? formatAgendaForBot(p.schedule, p.overflow, planDate, updated) : undefined;
+      await reply(agenda ? `MIT marked done ✅\n\n${agenda}` : 'MIT marked done ✅');
+      break;
+    }
+
+    case 'complete_k1': {
+      await setFocusCompletion(planDate, 'k1_done', true);
+      const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
+      const updated = p ? { ...p, k1_done: true } : undefined;
+      const agenda = p ? formatAgendaForBot(p.schedule, p.overflow, planDate, updated) : undefined;
+      await reply(agenda ? `K1 marked done ✅\n\n${agenda}` : 'K1 marked done ✅');
+      break;
+    }
+
+    case 'complete_k2': {
+      await setFocusCompletion(planDate, 'k2_done', true);
+      const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
+      const updated = p ? { ...p, k2_done: true } : undefined;
+      const agenda = p ? formatAgendaForBot(p.schedule, p.overflow, planDate, updated) : undefined;
+      await reply(agenda ? `K2 marked done ✅\n\n${agenda}` : 'K2 marked done ✅');
       break;
     }
 
@@ -884,7 +914,7 @@ bot.command('plan', async (ctx) => {
     if (!plan || !plan.schedule.length) {
       await ctx.reply(`No day plan saved for today (${today}). Run your daily debrief with a Wake: HH:MM to generate one.`);
     } else {
-      await ctx.reply(formatAgendaForBot(plan.schedule, plan.overflow, today));
+      await ctx.reply(formatAgendaForBot(plan.schedule, plan.overflow, today, plan));
     }
   } catch (err) {
     console.error('[bot] /plan error:', err instanceof Error ? err.message : err);

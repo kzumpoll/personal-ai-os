@@ -30,6 +30,10 @@ export interface DayPlan {
   planned_mit: string | null;
   planned_k1: string | null;
   planned_k2: string | null;
+  /** Intra-day completion flags for focus blocks */
+  mit_done: boolean;
+  k1_done: boolean;
+  k2_done: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +60,9 @@ export async function upsertDayPlan(data: {
        planned_mit = COALESCE(day_plans.planned_mit, EXCLUDED.planned_mit),
        planned_k1  = COALESCE(day_plans.planned_k1,  EXCLUDED.planned_k1),
        planned_k2  = COALESCE(day_plans.planned_k2,  EXCLUDED.planned_k2),
+       mit_done    = day_plans.mit_done,
+       k1_done     = day_plans.k1_done,
+       k2_done     = day_plans.k2_done,
        updated_at = NOW()
      RETURNING *`,
     [
@@ -77,6 +84,21 @@ export async function getDayPlanByDate(date: string): Promise<DayPlan | null> {
     [date]
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Mark MIT, K1, or K2 as done (or un-done) for a given plan date.
+ * Persists across plan regenerations — upsertDayPlan preserves these flags.
+ */
+export async function setFocusCompletion(
+  plan_date: string,
+  field: 'mit_done' | 'k1_done' | 'k2_done',
+  done: boolean
+): Promise<void> {
+  await pool.query(
+    `UPDATE day_plans SET ${field} = $1, updated_at = NOW() WHERE plan_date = $2`,
+    [done, plan_date]
+  );
 }
 
 export async function setDayPlanIntentions(
