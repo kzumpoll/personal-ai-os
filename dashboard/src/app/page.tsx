@@ -81,7 +81,11 @@ async function getData(dateParam?: string) {
   }
 }
 
-export const revalidate = 60;
+// force-dynamic: fresh data on every request.
+// Required so that: (a) MIT/K1/K2 completion state reflects Telegram updates immediately,
+// and (b) date navigation via searchParams re-renders the RSC with correct data —
+// ISR caching causes the server component to serve stale payloads on navigation.
+export const dynamic = 'force-dynamic';
 
 /** Returns "Today", "Yesterday", "Tomorrow", or weekday name for dates further out. */
 function getDayLabel(realToday: string, viewDate: string): string {

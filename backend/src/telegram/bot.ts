@@ -16,7 +16,7 @@ import {
   extractPositionalNumbers,
 } from './session';
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
-import { getTasksDueOnOrBefore, getTasksForDate } from '../db/queries/tasks';
+import { getTasksDueOnOrBefore, getTasksForDate, getOverdueTasks } from '../db/queries/tasks';
 import { executeToolCall } from '../tools/weather';
 import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, setFocusCompletion, IgnoredEventSnapshot, ScheduleBlock } from '../db/queries/day_plans';
 import { generateDayPlan, formatAgendaForBot, diffDayPlans } from '../services/dayplan';
@@ -72,10 +72,11 @@ async function regeneratePlanFor(
     };
   }
 
-  const [journal, calendarEvents, tasks] = await Promise.all([
+  const [journal, calendarEvents, todayTasks, overdueTasks] = await Promise.all([
     getJournalByDate(planDate),
     getEventsForDate(planDate),
-    getTasksForDate(planDate, 20),
+    getTasksForDate(planDate, 15),
+    getOverdueTasks(10),
   ]);
 
   const ignoredIds: string[] = [...(existing?.ignored_event_ids ?? [])];
@@ -91,9 +92,16 @@ async function regeneratePlanFor(
     });
   }
 
+  // Build task candidates: overdue first (most urgent), then today's tasks.
+  // Deduplicate by title and exclude MIT/K1/K2 (already in focus blocks).
   const focusTitles = new Set([journal?.mit, journal?.k1, journal?.k2].filter(Boolean));
-  const otherTasks = tasks
-    .filter((t) => !focusTitles.has(t.title))
+  const seen = new Set<string>();
+  const otherTasks = [...overdueTasks, ...todayTasks]
+    .filter((t) => {
+      if (focusTitles.has(t.title) || seen.has(t.title)) return false;
+      seen.add(t.title);
+      return true;
+    })
     .map((t) => t.title);
 
   const { schedule, overflow, work_start } = generateDayPlan({
