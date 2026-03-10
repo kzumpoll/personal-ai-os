@@ -13,6 +13,16 @@ async function getData() {
 
 export const revalidate = 30;
 
+const QUARTER_END: Record<string, string> = {
+  Q1: 'Mar 31', Q2: 'Jun 30', Q3: 'Sep 30', Q4: 'Dec 31',
+};
+
+function quarterEndLabel(quarter: string): string {
+  const [year, q] = quarter.split('-');
+  const end = QUARTER_END[q];
+  return end ? `ends ${end} ${year}` : '';
+}
+
 function inferQuarter(g: Goal): string {
   if (g.quarter) return g.quarter;
   if (g.target_date) {
@@ -75,6 +85,9 @@ export default async function GoalsPage() {
                   current
                 </span>
               )}
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                {quarterEndLabel(quarter)}
+              </span>
               <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
               <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}>
                 {qGoals.length}

@@ -16,16 +16,8 @@
 import { CalendarEvent } from './calendar';
 import { ScheduleBlock } from '../db/queries/day_plans';
 
-// Physical activity keywords that trigger a 30-min prep/travel buffer before the event
-const PHYSICAL_KEYWORDS = [
-  'padel', 'training', 'gym', 'workout', 'lesson', 'tennis', 'football',
-  'soccer', 'swimming', 'yoga', 'pilates', 'crossfit', 'boxing', 'hiking',
-  'cycling', 'run', 'jog', 'class', 'basketball', 'volleyball',
-];
-
-function needsPrepBuffer(title: string): boolean {
-  const lower = title.toLowerCase();
-  return PHYSICAL_KEYWORDS.some((k) => lower.includes(k));
+function isPadel(title: string): boolean {
+  return title.toLowerCase().includes('padel');
 }
 
 function parseHHMM(t: string): number {
@@ -152,16 +144,31 @@ export function generateDayPlan(params: {
     occupied.push({ start: eventStart, end: eventEnd, title: e.title });
   }
 
-  // Step 2: Add prep buffers for physical activity events, only where they don't conflict
+  // Step 2: Padel travel buffers — 30 min before ("Travel to padel") + 30 min after ("Travel from padel").
+  // Only applied to events containing "padel". No buffers for any other event type.
   for (const e of sortedEvents) {
-    if (!needsPrepBuffer(e.title)) continue;
+    if (!isPadel(e.title)) continue;
     const eventStart = eventStartMinutes(e);
-    const bufferStart = eventStart - 30;
-    if (bufferStart < workStartMin) continue;
-    const conflict = occupied.find((o) => bufferStart < o.end && eventStart > o.start && o.title !== e.title);
-    if (!conflict) {
-      occupied.push({ start: bufferStart, end: eventStart, title: `Prep / Leave (${e.title})` });
-      schedule.push({ time: toHHMM(bufferStart), title: `Prep / Leave`, type: 'break', duration_min: 30 });
+    const eventEnd = eventStart + eventDurationMinutes(e);
+
+    // Before buffer
+    const beforeStart = eventStart - 30;
+    if (beforeStart >= workStartMin) {
+      const conflict = occupied.find((o) => beforeStart < o.end && eventStart > o.start && o.title !== e.title);
+      if (!conflict) {
+        occupied.push({ start: beforeStart, end: eventStart, title: `Travel to padel (${e.title})` });
+        schedule.push({ time: toHHMM(beforeStart), title: 'Travel to padel', type: 'break', duration_min: 30 });
+      }
+    }
+
+    // After buffer
+    const afterEnd = eventEnd + 30;
+    if (afterEnd <= workEndMin) {
+      const conflict = occupied.find((o) => eventEnd < o.end && afterEnd > o.start && o.title !== e.title);
+      if (!conflict) {
+        occupied.push({ start: eventEnd, end: afterEnd, title: `Travel from padel (${e.title})` });
+        schedule.push({ time: toHHMM(eventEnd), title: 'Travel from padel', type: 'break', duration_min: 30 });
+      }
     }
   }
 

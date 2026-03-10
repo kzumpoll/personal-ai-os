@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Inline script runs synchronously before first paint — prevents theme flash */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var t=localStorage.getItem('theme');if(t==='light')document.documentElement.setAttribute('data-theme','light');}catch(e){}`,
+            __html: `try{var s=localStorage.getItem('theme');if(s){if(s==='light')document.documentElement.setAttribute('data-theme','light');}else if(window.matchMedia('(prefers-color-scheme:light)').matches){document.documentElement.setAttribute('data-theme','light');}else if(!window.matchMedia('(prefers-color-scheme:dark)').matches){var h=new Date().getHours();if(h>=6&&h<19)document.documentElement.setAttribute('data-theme','light');}}catch(e){}`,
           }}
         />
       </head>

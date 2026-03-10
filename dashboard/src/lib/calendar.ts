@@ -50,15 +50,37 @@ function buildAuth() {
   }
 }
 
+/**
+ * Convert a YYYY-MM-DD date + HH:MM:SS time in a given IANA timezone to a UTC Date.
+ */
+function localTimeToUtc(dateStr: string, timeStr: string, tz: string): Date {
+  const naive = new Date(`${dateStr}T${timeStr}.000Z`);
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(naive);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? '0');
+  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  const offsetMs = naive.getTime() - localAsUtcMs;
+  return new Date(naive.getTime() + offsetMs);
+}
+
 export async function getEventsForDate(date: string): Promise<CalendarEvent[]> {
   const auth = buildAuth();
   if (!auth) return [];
   try {
     const cal = google.calendar({ version: 'v3', auth });
+    const tz = process.env.USER_TZ ?? 'UTC';
+    const dayStart = localTimeToUtc(date, '00:00:00', tz);
+    const dayEnd   = localTimeToUtc(date, '23:59:59', tz);
     const res = await cal.events.list({
       calendarId: 'primary',
-      timeMin: new Date(`${date}T00:00:00`).toISOString(),
-      timeMax: new Date(`${date}T23:59:59`).toISOString(),
+      timeMin: dayStart.toISOString(),
+      timeMax: dayEnd.toISOString(),
+      timeZone: tz,
       singleEvents: true,
       orderBy: 'startTime',
       maxResults: 20,
@@ -83,10 +105,23 @@ function parseEvent(e: calendar_v3.Schema$Event): CalendarEvent {
 
 export function formatEventTime(iso: string): string {
   try {
+    const tz = process.env.USER_TZ;
     const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    if (tz) {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+      const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+      return `${h}:${m}`;
+    }
+    // Fallback: slice local-time part from offset-bearing ISO string
+    return iso.slice(11, 16);
   } catch {
-    return '';
+    return iso.slice(11, 16);
   }
 }
 

@@ -20,6 +20,12 @@ interface DayPlan {
   work_start: string | null;
   schedule: ScheduleBlock[];
   overflow: string[];
+  mit_done: boolean;
+  k1_done: boolean;
+  k2_done: boolean;
+  planned_mit: string | null;
+  planned_k1: string | null;
+  planned_k2: string | null;
 }
 
 async function getData(dateParam?: string) {
@@ -77,6 +83,40 @@ async function getData(dateParam?: string) {
 
 export const revalidate = 60;
 
+/** Returns "Today", "Yesterday", "Tomorrow", or weekday name for dates further out. */
+function getDayLabel(realToday: string, viewDate: string): string {
+  if (viewDate === realToday) return 'Today';
+  const todayMs = new Date(realToday + 'T12:00:00').getTime();
+  const viewMs  = new Date(viewDate  + 'T12:00:00').getTime();
+  const diff = Math.round((viewMs - todayMs) / 86_400_000);
+  if (diff === -1) return 'Yesterday';
+  if (diff === 1)  return 'Tomorrow';
+  return format(parseISO(viewDate + 'T12:00:00'), 'EEEE');
+}
+
+/** Infers a calendar icon from event title via keyword matching. */
+function getEventIcon(title: string): string {
+  const t = title.toLowerCase();
+  if (t.includes('padel') || t.includes('tennis') || t.includes('squash')) return '🎾';
+  if (
+    t.includes('lunch') || t.includes('dinner') || t.includes('brunch') ||
+    t.includes('restaurant') || t.includes('nook') || t.includes('cafe') ||
+    t.includes('coffee') || t.includes('food') || t.includes('eat')
+  ) return '🍽️';
+  if (
+    t.includes('flight') || t.includes('airport') || t.includes('travel') ||
+    t.includes('drive') || t.includes('uber') || t.includes('taxi')
+  ) return '🚗';
+  if (
+    t.includes('date') || t.includes('jofinne') || t.includes('anniversary')
+  ) return '❤️';
+  if (
+    t.includes('standup') || t.includes('meeting') || t.includes('sync') ||
+    t.includes('call') || t.includes('interview') || t.includes('review')
+  ) return '📋';
+  return '📅';
+}
+
 function SectionLabel({ children, color = 'var(--text-muted)' }: { children: React.ReactNode; color?: string }) {
   return (
     <p
@@ -117,7 +157,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
     <div className="max-w-4xl mx-auto">
       <div className="flex items-start justify-between gap-4 mb-6">
         <PageHeader
-          title={isToday ? 'Today' : format(todayDate, 'EEEE')}
+          title={getDayLabel(realToday, todayStr)}
           subtitle={dateLabel}
         />
         <div className="mt-1 shrink-0">
@@ -139,54 +179,30 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             {journal.mit && (
               <div>
-                <p
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '9px',
-                    letterSpacing: '0.14em',
-                    color: 'var(--cyan)',
-                    marginBottom: 6,
-                  }}
-                >
-                  MIT
+                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>
+                  MIT {dayPlan?.mit_done && '✅'}
                 </p>
-                <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>
+                <p className="text-sm font-medium" style={{ color: dayPlan?.mit_done ? 'var(--text-muted)' : 'var(--text)', textDecoration: dayPlan?.mit_done ? 'line-through' : 'none' }}>
                   {journal.mit}
                 </p>
               </div>
             )}
             {journal.k1 && (
               <div>
-                <p
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '9px',
-                    letterSpacing: '0.14em',
-                    color: 'var(--blue)',
-                    marginBottom: 6,
-                  }}
-                >
-                  K1
+                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>
+                  K1 {dayPlan?.k1_done && '✅'}
                 </p>
-                <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                <p className="text-sm" style={{ color: dayPlan?.k1_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k1_done ? 'line-through' : 'none' }}>
                   {journal.k1}
                 </p>
               </div>
             )}
             {journal.k2 && (
               <div>
-                <p
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: '9px',
-                    letterSpacing: '0.14em',
-                    color: 'var(--violet)',
-                    marginBottom: 6,
-                  }}
-                >
-                  K2
+                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>
+                  K2 {dayPlan?.k2_done && '✅'}
                 </p>
-                <p className="text-sm" style={{ color: 'var(--text-dim)' }}>
+                <p className="text-sm" style={{ color: dayPlan?.k2_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k2_done ? 'line-through' : 'none' }}>
                   {journal.k2}
                 </p>
               </div>
@@ -203,14 +219,46 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
         </section>
       ) : (
         <div
-          className="mb-8 rounded-lg p-5 text-center text-sm"
-          style={{ border: '1px dashed var(--border)', color: 'var(--text-muted)' }}
+          className="mb-8 rounded-lg p-5"
+          style={{ border: '1px dashed var(--border)' }}
         >
-          No debrief for {isToday ? 'today' : todayStr}.{' '}
-          {isToday && (
-            <span style={{ color: 'var(--text-dim)' }}>
-              Run <strong>daily debrief</strong> in Telegram.
-            </span>
+          {/* Show planned priorities from day_plan if they exist (useful for tomorrow view) */}
+          {(dayPlan?.planned_mit || dayPlan?.planned_k1 || dayPlan?.planned_k2) ? (
+            <>
+              <SectionLabel color="var(--cyan)">Planned Focus — {todayStr}</SectionLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-3">
+                {dayPlan.planned_mit && (
+                  <div>
+                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>MIT</p>
+                    <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{dayPlan.planned_mit}</p>
+                  </div>
+                )}
+                {dayPlan.planned_k1 && (
+                  <div>
+                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>K1</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k1}</p>
+                  </div>
+                )}
+                {dayPlan.planned_k2 && (
+                  <div>
+                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>K2</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k2}</p>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                Day debrief for this date has not been completed yet.
+              </p>
+            </>
+          ) : (
+            <p className="text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+              No debrief for {isToday ? 'today' : todayStr}.{' '}
+              {isToday && (
+                <span style={{ color: 'var(--text-dim)' }}>
+                  Run <strong>daily debrief</strong> in Telegram.
+                </span>
+              )}
+            </p>
           )}
         </div>
       )}
@@ -232,6 +280,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                 >
                   {e.allDay ? 'all day' : formatEventTime(e.start)}
                 </span>
+                <span className="shrink-0 text-sm">{getEventIcon(e.title)}</span>
                 <span className="text-sm font-medium flex-1 truncate" style={{ color: 'var(--text)' }}>{e.title}</span>
                 {e.location && (
                   <span className="text-xs truncate shrink-0" style={{ color: 'var(--text-faint)', maxWidth: 120 }}>{e.location}</span>
@@ -246,13 +295,17 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
       {dayPlan && dayPlan.schedule.length > 0 && (
         <section className="mb-8">
           <SectionLabel color="var(--cyan)">
-            Agenda{dayPlan.wake_time ? ` — wake ${dayPlan.wake_time}` : ''}
+            Day Plan{dayPlan.wake_time ? ` — wake ${dayPlan.wake_time}` : ''}
           </SectionLabel>
           <div className="flex flex-col gap-1">
             {dayPlan.schedule
               .filter((b) => b.type !== 'work_start' || b.duration_min > 0 || true)
               .map((block, i) => {
-                const color = typeColors[block.type] ?? 'var(--text-muted)';
+                const done =
+                  (block.type === 'mit' && dayPlan.mit_done) ||
+                  (block.type === 'k1'  && dayPlan.k1_done)  ||
+                  (block.type === 'k2'  && dayPlan.k2_done);
+                const color = done ? 'var(--green)' : (typeColors[block.type] ?? 'var(--text-muted)');
                 return (
                   <div key={i} className="flex items-center gap-3">
                     <span
@@ -261,8 +314,16 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                     >
                       {block.time}
                     </span>
-                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
-                    <span className="text-sm flex-1 truncate" style={{ color: 'var(--text)' }}>{block.title}</span>
+                    {done
+                      ? <span className="text-xs shrink-0">✅</span>
+                      : <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: color }} />
+                    }
+                    <span
+                      className="text-sm flex-1 truncate"
+                      style={{ color: done ? 'var(--text-muted)' : 'var(--text)', textDecoration: done ? 'line-through' : 'none' }}
+                    >
+                      {block.title}
+                    </span>
                     {block.duration_min > 0 && (
                       <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
                         {block.duration_min}m
