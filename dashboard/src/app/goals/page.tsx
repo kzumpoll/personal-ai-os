@@ -67,7 +67,7 @@ export default async function GoalsPage() {
             <div className="flex items-center gap-3 mb-3">
               <span
                 style={{
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: "var(--font-mono)",
                   fontSize: '10px',
                   letterSpacing: '0.14em',
                   textTransform: 'uppercase',
@@ -80,16 +80,16 @@ export default async function GoalsPage() {
               {isCurrent && (
                 <span
                   className="px-1.5 py-0.5 rounded"
-                  style={{ background: 'rgba(6,182,212,0.12)', color: 'var(--cyan)', fontFamily: "'JetBrains Mono', monospace", fontSize: '9px' }}
+                  style={{ background: 'rgba(6,182,212,0.12)', color: 'var(--cyan)', fontFamily: "var(--font-mono)", fontSize: '9px' }}
                 >
                   current
                 </span>
               )}
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>
                 {quarterEndLabel(quarter)}
               </span>
               <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
-              <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)' }}>
                 {qGoals.length}
               </span>
             </div>
@@ -105,7 +105,7 @@ export default async function GoalsPage() {
           <div className="flex items-center gap-3 mb-3">
             <span
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: '10px',
                 letterSpacing: '0.14em',
                 textTransform: 'uppercase',
@@ -141,7 +141,7 @@ function GoalRow({ goal }: { goal: Goal }) {
         {goal.target_date && (
           <span
             style={{
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-mono)",
               fontSize: '10px',
               color: 'var(--text-faint)',
               whiteSpace: 'nowrap',

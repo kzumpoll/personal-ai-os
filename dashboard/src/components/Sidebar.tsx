@@ -76,7 +76,7 @@ export default function Sidebar() {
         </p>
         <p
           style={{
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: "var(--font-mono)",
             fontSize: '9px',
             letterSpacing: '0.1em',
             color: 'var(--cyan)',

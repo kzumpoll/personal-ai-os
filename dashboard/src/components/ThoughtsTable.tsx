@@ -50,7 +50,7 @@ export default function ThoughtsTable({ thoughts }: Props) {
           gap: '12px',
           background: 'var(--surface)',
           borderBottom: '1px solid var(--border)',
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: "var(--font-mono)",
           fontSize: '9px',
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
@@ -93,7 +93,7 @@ export default function ThoughtsTable({ thoughts }: Props) {
                 className="text-xs text-right shrink-0"
                 style={{
                   color: 'var(--text-faint)',
-                  fontFamily: "'JetBrains Mono', monospace",
+                  fontFamily: "var(--font-mono)",
                   lineHeight: '20px',
                 }}
               >

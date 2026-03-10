@@ -84,10 +84,10 @@ function ProjectCard({ project: p, open, done }: { project: Project; open: Task[
 
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+          <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
             {pct}%
           </span>
-          <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+          <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
             {done}/{total}
           </span>
         </div>
@@ -141,7 +141,7 @@ export default async function ProjectsPage() {
         <div className="flex flex-col gap-8">
           {activeProjects.length > 0 && (
             <section>
-              <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+              <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                 Active
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -154,7 +154,7 @@ export default async function ProjectsPage() {
 
           {otherProjects.length > 0 && (
             <section>
-              <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+              <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                 Other
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

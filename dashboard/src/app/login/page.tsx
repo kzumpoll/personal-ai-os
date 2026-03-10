@@ -44,7 +44,7 @@ function LoginForm() {
       >
         <p
           style={{
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: "var(--font-mono)",
             fontSize: '11px',
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
@@ -80,7 +80,7 @@ function LoginForm() {
               color: 'var(--bg)',
               opacity: loading || !password ? 0.5 : 1,
               cursor: loading || !password ? 'not-allowed' : 'pointer',
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-mono)",
             }}
           >
             {loading ? 'Checking…' : 'Enter'}

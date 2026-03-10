@@ -126,7 +126,7 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
     <p
       className="mb-3"
       style={{
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '10px',
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
@@ -183,7 +183,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             {journal.mit && (
               <div>
-                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>
                   MIT {dayPlan?.mit_done && '✅'}
                 </p>
                 <p className="text-sm font-medium" style={{ color: dayPlan?.mit_done ? 'var(--text-muted)' : 'var(--text)', textDecoration: dayPlan?.mit_done ? 'line-through' : 'none' }}>
@@ -193,7 +193,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
             )}
             {journal.k1 && (
               <div>
-                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>
                   K1 {dayPlan?.k1_done && '✅'}
                 </p>
                 <p className="text-sm" style={{ color: dayPlan?.k1_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k1_done ? 'line-through' : 'none' }}>
@@ -203,7 +203,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
             )}
             {journal.k2 && (
               <div>
-                <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>
+                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>
                   K2 {dayPlan?.k2_done && '✅'}
                 </p>
                 <p className="text-sm" style={{ color: dayPlan?.k2_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k2_done ? 'line-through' : 'none' }}>
@@ -233,19 +233,19 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-3">
                 {dayPlan.planned_mit && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>MIT</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>MIT</p>
                     <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{dayPlan.planned_mit}</p>
                   </div>
                 )}
                 {dayPlan.planned_k1 && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>K1</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>K1</p>
                     <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k1}</p>
                   </div>
                 )}
                 {dayPlan.planned_k2 && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>K2</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>K2</p>
                     <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k2}</p>
                   </div>
                 )}
@@ -280,7 +280,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
               >
                 <span
                   className="text-xs shrink-0"
-                  style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace", minWidth: 40 }}
+                  style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)", minWidth: 40 }}
                 >
                   {e.allDay ? 'all day' : formatEventTime(e.start)}
                 </span>
@@ -314,7 +314,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                   <div key={i} className="flex items-center gap-3">
                     <span
                       className="text-xs shrink-0"
-                      style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace", minWidth: 40 }}
+                      style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)", minWidth: 40 }}
                     >
                       {block.time}
                     </span>
@@ -329,7 +329,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                       {block.title}
                     </span>
                     {block.duration_min > 0 && (
-                      <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+                      <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                         {block.duration_min}m
                       </span>
                     )}
@@ -339,7 +339,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
           </div>
           {dayPlan.overflow.length > 0 && (
             <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
-              <p className="text-xs mb-1.5" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+              <p className="text-xs mb-1.5" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                 OVERFLOW
               </p>
               {dayPlan.overflow.map((t, i) => (
@@ -407,7 +407,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                 {g.target_date && (
                   <span
                     className="text-xs shrink-0"
-                    style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}
+                    style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
                   >
                     {g.target_date.toString().slice(0, 10)}
                   </span>

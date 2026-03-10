@@ -101,7 +101,7 @@ function SectionLabel({ children, color = 'var(--text-faint)' }: { children: Rea
     <p
       className="mb-3"
       style={{
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '9px',
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
@@ -146,7 +146,7 @@ export default async function ReviewPage() {
                   {g.target_date && (
                     <span
                       className="text-xs shrink-0"
-                      style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}
+                      style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
                     >
                       {fmtDate(g.target_date)}
                     </span>
@@ -172,7 +172,7 @@ export default async function ReviewPage() {
                   <span className="text-sm flex-1" style={{ color: 'var(--text)' }}>{w.content}</span>
                   <span
                     className="text-xs shrink-0"
-                    style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}
+                    style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
                   >
                     {fmtDate(w.entry_date)}
                   </span>
@@ -199,7 +199,7 @@ export default async function ReviewPage() {
                 >
                   <p
                     className="text-xs mb-2"
-                    style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}
+                    style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
                   >
                     {fmtDate(j.entry_date)}
                   </p>
@@ -210,7 +210,7 @@ export default async function ReviewPage() {
                           style={{
                             color: 'var(--cyan)',
                             fontWeight: 600,
-                            fontFamily: "'JetBrains Mono', monospace",
+                            fontFamily: "var(--font-mono)",
                             fontSize: '10px',
                           }}
                         >
@@ -224,7 +224,7 @@ export default async function ReviewPage() {
                         <span
                           style={{
                             fontWeight: 600,
-                            fontFamily: "'JetBrains Mono', monospace",
+                            fontFamily: "var(--font-mono)",
                             fontSize: '10px',
                             color: 'var(--blue)',
                           }}
@@ -239,7 +239,7 @@ export default async function ReviewPage() {
                         <span
                           style={{
                             fontWeight: 600,
-                            fontFamily: "'JetBrains Mono', monospace",
+                            fontFamily: "var(--font-mono)",
                             fontSize: '10px',
                             color: 'var(--violet)',
                           }}
@@ -280,7 +280,7 @@ export default async function ReviewPage() {
                     <div className="mt-1.5 flex items-start gap-1.5">
                       <span
                         className="text-xs shrink-0"
-                        style={{ color: 'var(--cyan)', fontFamily: "'JetBrains Mono', monospace" }}
+                        style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}
                       >
                         →
                       </span>
@@ -309,7 +309,7 @@ export default async function ReviewPage() {
                   {t.due_date && (
                     <span
                       className="text-xs shrink-0"
-                      style={{ color: 'var(--red)', fontFamily: "'JetBrains Mono', monospace" }}
+                      style={{ color: 'var(--red)', fontFamily: "var(--font-mono)" }}
                     >
                       {fmtDate(t.due_date)}
                     </span>
@@ -340,7 +340,7 @@ export default async function ReviewPage() {
                     </span>
                     <span
                       className="text-xs"
-                      style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}
+                      style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
                     >
                       {fmtDate(r.period_start)} – {fmtDate(r.period_end)}
                     </span>

@@ -70,7 +70,7 @@ function AddResourceForm({ onAdded }: AddFormProps) {
         </button>
       ) : (
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <p className="text-xs mb-3" style={{ fontFamily: "'JetBrains Mono', monospace", letterSpacing: '0.12em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>New resource</p>
+          <p className="text-xs mb-3" style={{ fontFamily: "var(--font-mono)", letterSpacing: '0.12em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>New resource</p>
           <div className="flex flex-col gap-2">
             <input
               autoFocus
@@ -226,7 +226,7 @@ export default function ResourceList({ resources: initial }: Props) {
       </div>
 
       {/* Count */}
-      <p className="text-xs mb-3" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+      <p className="text-xs mb-3" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
         {filtered.length} result{filtered.length !== 1 ? 's' : ''}
       </p>
 
@@ -276,7 +276,7 @@ export default function ResourceList({ resources: initial }: Props) {
                       </p>
                     )}
                     {hasUrl && (
-                      <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+                      <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                         {r.content_or_url}
                       </p>
                     )}
@@ -292,7 +292,7 @@ export default function ResourceList({ resources: initial }: Props) {
                       </span>
                     )}
                     {dateStr && (
-                      <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>
+                      <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
                         {dateStr}
                       </span>
                     )}

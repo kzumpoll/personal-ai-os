@@ -43,7 +43,7 @@ export default function PageHeader({ title, subtitle, badge, badgeColor = 'cyan'
               style={{
                 background: badgeColors[badgeColor],
                 color: badgeText[badgeColor],
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: '10px',
                 letterSpacing: '0.06em',
               }}
@@ -57,7 +57,7 @@ export default function PageHeader({ title, subtitle, badge, badgeColor = 'cyan'
             style={{
               fontSize: '12px',
               color: 'var(--text-muted)',
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: "var(--font-mono)",
               letterSpacing: '0.02em',
             }}
           >

@@ -116,7 +116,7 @@ export default function TaskCard({ task, bucket }: Props) {
         <p
           className="pl-[22px]"
           style={{
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: "var(--font-mono)",
             color: 'var(--text-faint)',
             fontSize: '10px',
           }}

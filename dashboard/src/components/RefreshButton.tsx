@@ -33,7 +33,7 @@ export default function RefreshButton() {
         color: justRefreshed ? 'var(--green)' : 'var(--text-muted)',
         cursor: isPending ? 'wait' : 'pointer',
         fontSize: '11px',
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         letterSpacing: '0.05em',
         transition: 'color 0.2s',
         opacity: isPending ? 0.6 : 1,

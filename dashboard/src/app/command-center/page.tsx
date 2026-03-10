@@ -122,7 +122,7 @@ function SectionTitle({ children, color = 'var(--text-muted)' }: { children: Rea
     <p
       className="mb-3"
       style={{
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '10px',
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
@@ -144,13 +144,13 @@ function MetricCell({
     >
       <span
         className="text-2xl font-bold"
-        style={{ color, fontFamily: "'JetBrains Mono', monospace" }}
+        style={{ color, fontFamily: "var(--font-mono)" }}
       >
         {value}
       </span>
       <span
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: "var(--font-mono)",
           fontSize: '10px',
           letterSpacing: '0.1em',
           textTransform: 'uppercase',
@@ -208,19 +208,19 @@ export default async function CommandCenterPage() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 {journal.mit && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 4 }}>MIT</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 4 }}>MIT</p>
                     <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{journal.mit}</p>
                   </div>
                 )}
                 {journal.k1 && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 4 }}>K1</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 4 }}>K1</p>
                     <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.k1}</p>
                   </div>
                 )}
                 {journal.k2 && (
                   <div>
-                    <p style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 4 }}>K2</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 4 }}>K2</p>
                     <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.k2}</p>
                   </div>
                 )}
@@ -248,7 +248,7 @@ export default async function CommandCenterPage() {
                     ?? (m.after_data as Record<string, unknown> | null)?.content as string | undefined;
                   return (
                     <div key={m.id} className="flex items-center gap-3 py-1.5" style={{ borderBottom: '1px solid var(--border)' }}>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)', minWidth: 40 }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)', minWidth: 40 }}>
                         {fmtTime(m.created_at)}
                       </span>
                       <span style={{ fontSize: '12px', color }}>{label}</span>
@@ -330,7 +330,7 @@ export default async function CommandCenterPage() {
                     <div className="flex items-center justify-between">
                       <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Frontend</span>
                       <div className="flex items-center gap-1.5">
-                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--cyan)' }}>[{frontendSha}]</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--cyan)' }}>[{frontendSha}]</span>
                         {frontendMsg && <span className="text-xs truncate" style={{ color: 'var(--text-muted)', maxWidth: 120 }}>{frontendMsg.slice(0, 40)}</span>}
                       </div>
                     </div>
@@ -338,13 +338,13 @@ export default async function CommandCenterPage() {
                   {backendSha && (
                     <div className="flex items-center justify-between">
                       <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Backend</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: mismatch ? 'var(--amber)' : 'var(--cyan)' }}>[{backendSha}]</span>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: mismatch ? 'var(--amber)' : 'var(--cyan)' }}>[{backendSha}]</span>
                     </div>
                   )}
                   {!backendSha && (
                     <div className="flex items-center justify-between">
                       <span style={{ fontSize: '11px', color: 'var(--text-faint)' }}>Backend</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}>unreachable</span>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)' }}>unreachable</span>
                     </div>
                   )}
                   {mismatch && (
@@ -353,11 +353,11 @@ export default async function CommandCenterPage() {
                     </div>
                   )}
                   <div className="flex items-center justify-between mt-1">
-                    <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>
                       {process.env.VERCEL_GIT_COMMIT_REF ?? 'main'} branch
                     </span>
                     {backendHealth?.deployed_at && (
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>
                         deployed {formatDistanceToNow(new Date(backendHealth.deployed_at), { addSuffix: true })}
                       </span>
                     )}
@@ -378,7 +378,7 @@ export default async function CommandCenterPage() {
               ].map(({ label, status, color }) => (
                 <div key={label} className="flex items-center justify-between">
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{label}</span>
-                  <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color }}>{status}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color }}>{status}</span>
                 </div>
               ))}
               {/* Claude Code — live from DB */}
@@ -397,7 +397,7 @@ export default async function CommandCenterPage() {
                   <>
                     <div className="flex items-center justify-between">
                       <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Claude Code</span>
-                      <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: statusColor }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: statusColor }}>
                         {statusLabel}
                       </span>
                     </div>
@@ -413,7 +413,7 @@ export default async function CommandCenterPage() {
                     )}
                     {ago && (
                       <div className="flex justify-end">
-                        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)' }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>
                           updated {ago}
                         </span>
                       </div>

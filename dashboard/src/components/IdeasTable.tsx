@@ -149,7 +149,7 @@ export default function IdeasTable({ ideas }: Props) {
             </span>
             <span
               style={{
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: '10px',
                 color: 'var(--text-faint)',
               }}
@@ -168,7 +168,7 @@ export default function IdeasTable({ ideas }: Props) {
                 gap: '12px',
                 background: 'var(--surface)',
                 borderBottom: '1px solid var(--border)',
-                fontFamily: "'JetBrains Mono', monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: '9px',
                 letterSpacing: '0.12em',
                 textTransform: 'uppercase',
@@ -229,7 +229,7 @@ export default function IdeasTable({ ideas }: Props) {
                       className="text-xs text-right shrink-0"
                       style={{
                         color: 'var(--text-faint)',
-                        fontFamily: "'JetBrains Mono', monospace",
+                        fontFamily: "var(--font-mono)",
                         lineHeight: '20px',
                       }}
                     >
@@ -330,7 +330,7 @@ export default function IdeasTable({ ideas }: Props) {
                     <div className="mt-1.5 flex items-start gap-1.5">
                       <span
                         className="text-xs shrink-0 mt-0.5"
-                        style={{ color: 'var(--cyan)', fontFamily: "'JetBrains Mono', monospace" }}
+                        style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}
                       >
                         →
                       </span>

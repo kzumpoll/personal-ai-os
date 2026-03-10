@@ -1,17 +1,18 @@
-import { format, addDays } from 'date-fns';
+import { addDays, parseISO } from 'date-fns';
 import pool, { Task, logDbError } from '@/lib/db';
+import { getLocalToday } from '@/lib/date';
 import TaskBoard from '@/components/TaskBoard';
 import PageHeader from '@/components/PageHeader';
 
 const emptyBoard = { overdue: [] as Task[], today: [] as Task[], tomorrow: [] as Task[], next7: [] as Task[], future: [] as Task[] };
 
 async function getBoard() {
-  // Use Node.js local time (same as the bot) rather than PostgreSQL CURRENT_DATE
-  // (which is UTC in Supabase), so buckets match what Telegram shows.
-  const now = new Date();
-  const today = format(now, 'yyyy-MM-dd');
-  const tomorrow = format(addDays(now, 1), 'yyyy-MM-dd');
-  const next7End = format(addDays(now, 7), 'yyyy-MM-dd');
+  // Use getLocalToday() (USER_TZ-aware) so buckets use Bali local date, not UTC.
+  // Plain new Date() on Vercel returns UTC, causing tasks to appear in wrong bucket
+  // across midnight (e.g. March 10 tasks staying in "Today" when it is already March 11).
+  const today = getLocalToday();
+  const tomorrow = addDays(parseISO(today + 'T12:00:00'), 1).toISOString().slice(0, 10);
+  const next7End = addDays(parseISO(today + 'T12:00:00'), 7).toISOString().slice(0, 10);
 
   console.log(`[getBoard] query params  today=${today}  tomorrow=${tomorrow}  next7End=${next7End}`);
 
@@ -47,17 +48,20 @@ async function getBoard() {
   }
 }
 
-// No ISR — tasks page must always reflect DB state after mutations.
-// router.refresh() + revalidatePath in the API route handle cache busting.
+// force-dynamic: opts out of the Full Route Cache (server-side).
+// revalidate = 0: belt-and-suspenders — marks the route as dynamic so Next.js
+// never serves a prerendered version.
+// Together with staleTimes.dynamic = 0 in next.config.js (which kills the client-side
+// Router Cache TTL), router.refresh() now always fetches a genuinely fresh RSC payload.
+export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export default async function TasksPage() {
   const board = await getBoard();
   const total = Object.values(board).reduce((s, arr) => s + arr.length, 0);
   const overdueCount = board.overdue.length;
-  const now = new Date();
-  const todayStr = format(now, 'yyyy-MM-dd');
-  const tomorrowStr = format(addDays(now, 1), 'yyyy-MM-dd');
+  const todayStr = getLocalToday();
+  const tomorrowStr = addDays(parseISO(todayStr + 'T12:00:00'), 1).toISOString().slice(0, 10);
 
   return (
     <div>

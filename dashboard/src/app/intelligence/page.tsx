@@ -35,7 +35,7 @@ function SectionTitle({ children, color = 'var(--text-muted)' }: { children: Rea
     <p
       className="mb-4"
       style={{
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '10px',
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
@@ -74,7 +74,7 @@ function CaptureCard({ content, meta, accent }: { content: string; meta?: string
       {meta && (
         <p
           className="mt-1.5"
-          style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}
+          style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)' }}
         >
           {meta}
         </p>
@@ -201,7 +201,7 @@ export default async function IntelligencePage() {
                   {g.target_date && (
                     <p
                       className="mt-1"
-                      style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', color: 'var(--text-faint)' }}
+                      style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)' }}
                     >
                       Target: {fmtDate(g.target_date)}
                     </p>

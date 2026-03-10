@@ -34,7 +34,7 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
     <p
       className="mb-2 mt-5"
       style={{
-        fontFamily: "'JetBrains Mono', monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: '9px',
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
@@ -108,7 +108,7 @@ export default function SearchPage() {
       </div>
 
       {loading && (
-        <p className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>searching…</p>
+        <p className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>searching…</p>
       )}
 
       {results && !loading && total === 0 && (
@@ -129,7 +129,7 @@ export default function SearchPage() {
                     />
                     <span className="text-sm flex-1 truncate" style={{ color: 'var(--text)', textDecoration: t.status === 'done' ? 'line-through' : 'none' }}>{t.title}</span>
                     {t.due_date && (
-                      <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(t.due_date)}</span>
+                      <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{fmtDate(t.due_date)}</span>
                     )}
                   </div>
                 ))}
@@ -148,7 +148,7 @@ export default function SearchPage() {
                       {i.actionability && (
                         <span className="text-xs capitalize" style={{ color: 'var(--text-faint)' }}>{i.actionability}</span>
                       )}
-                      <span className="text-xs ml-auto" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(i.created_at)}</span>
+                      <span className="text-xs ml-auto" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{fmtDate(i.created_at)}</span>
                     </div>
                   </div>
                 ))}
@@ -163,7 +163,7 @@ export default function SearchPage() {
                 {results.thoughts.map((t) => (
                   <div key={t.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
                     <p className="text-sm flex-1" style={{ color: 'var(--text)' }}>{t.content}</p>
-                    <span className="text-xs shrink-0 mt-0.5" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(t.created_at)}</span>
+                    <span className="text-xs shrink-0 mt-0.5" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{fmtDate(t.created_at)}</span>
                   </div>
                 ))}
               </div>
@@ -185,7 +185,7 @@ export default function SearchPage() {
                     )}
                     <div className="flex items-center gap-2 mt-0.5">
                       {r.type && <span className="text-xs capitalize" style={{ color: 'var(--text-faint)' }}>{r.type}</span>}
-                      <span className="text-xs ml-auto" style={{ color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', monospace" }}>{fmtDate(r.created_at)}</span>
+                      <span className="text-xs ml-auto" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{fmtDate(r.created_at)}</span>
                     </div>
                   </div>
                 ))}

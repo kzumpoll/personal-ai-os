@@ -51,7 +51,7 @@ export default function DayNav({ currentDate }: Props) {
             fontSize: 12,
             cursor: 'pointer',
             lineHeight: 1.4,
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: "var(--font-mono)",
             letterSpacing: '0.06em',
           }}
         >

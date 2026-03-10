@@ -53,10 +53,10 @@ function DroppableColumn({ bucket, tasks, isDragging }: { bucket: Bucket; tasks:
         className="flex items-center justify-between mb-1 pb-2"
         style={{ borderBottom: `1px solid ${isOver ? color : 'var(--border)'}`, transition: 'border-color 0.15s' }}
       >
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color, fontWeight: 600 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', letterSpacing: '0.12em', textTransform: 'uppercase', color, fontWeight: 600 }}>
           {label}
         </span>
-        <span className="px-1.5 py-0.5 rounded" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', fontFamily: "'JetBrains Mono', monospace", fontSize: '10px' }}>
+        <span className="px-1.5 py-0.5 rounded" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', fontFamily: "var(--font-mono)", fontSize: '10px' }}>
           {tasks.length}
         </span>
       </div>

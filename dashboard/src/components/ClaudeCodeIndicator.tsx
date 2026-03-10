@@ -67,7 +67,7 @@ export default function ClaudeCodeIndicator() {
           className="rounded-full shrink-0"
           style={{ width: 6, height: 6, background: 'var(--text-faint)' }}
         />
-        <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '9px', color: 'var(--text-faint)', letterSpacing: '0.1em' }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)', letterSpacing: '0.1em' }}>
           CC
         </span>
       </div>
@@ -95,7 +95,7 @@ export default function ClaudeCodeIndicator() {
       />
       <span
         style={{
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: "var(--font-mono)",
           fontSize: '9px',
           letterSpacing: '0.1em',
           color: 'var(--text-faint)',
