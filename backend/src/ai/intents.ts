@@ -20,6 +20,7 @@ export type IntentType =
   | 'add_goal'
   | 'create_resource'
   | 'calendar_create_event'
+  | 'calendar_create_events_bulk'
   | 'calendar_update_event'
   | 'calendar_delete_event'
   | 'daily_debrief'
@@ -236,6 +237,20 @@ export interface CalendarCreateEventIntent {
   };
 }
 
+export interface CalendarCreateEventsBulkIntent {
+  intent: 'calendar_create_events_bulk';
+  data: {
+    events: Array<{
+      title: string;
+      start_datetime: string;
+      end_datetime: string;
+      all_day?: boolean;
+      description?: string;
+      location?: string;
+    }>;
+  };
+}
+
 export interface CalendarUpdateEventIntent {
   intent: 'calendar_update_event';
   data: {
@@ -291,6 +306,7 @@ export type Intent =
   | AddGoalIntent
   | CreateResourceIntent
   | CalendarCreateEventIntent
+  | CalendarCreateEventsBulkIntent
   | CalendarUpdateEventIntent
   | CalendarDeleteEventIntent
   | DailyDebriefIntent

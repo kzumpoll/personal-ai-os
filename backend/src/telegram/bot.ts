@@ -3,6 +3,8 @@ import { Express } from 'express';
 import { buildContextPack, determineDebriefDates } from '../ai/context';
 import {
   interpretUserIntent,
+  interpretImageMessage,
+  classifyImageIntent,
   interpretDebriefReply,
   confirmDebriefSummary,
   applyDebriefCorrection,
@@ -785,24 +787,73 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
-  // --- Image edit: awaiting prompt ---
+  // --- Image: awaiting prompt (editing or understanding) ---
   if (session.state === 'image_awaiting_prompt') {
     if (isNegative(lower) || lower === 'cancel') {
       clearSession(chatId);
-      await reply('Image edit cancelled.');
+      await reply('Cancelled.');
       return;
     }
     const { imageBuffer, imageMimeType } = session;
     clearSession(chatId);
-    await reply('Editing image...');
-    try {
-      const result = await editImage(imageBuffer, imageMimeType, text);
-      // Store the edited image — bot.on('text') will pick it up and send it as a photo
-      pendingImageReplies.set(chatId, result);
-      if (result.description) await reply(result.description);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await reply(`Image edit failed — ${msg.slice(0, 80)}`);
+
+    const imgIntent = classifyImageIntent(text);
+    console.log('[bot] image_awaiting_prompt: classified as', imgIntent);
+
+    if (imgIntent === 'understand') {
+      // Route to Claude vision for understanding / extraction
+      const base64 = imageBuffer.toString('base64');
+      const planDate = getLocalToday();
+      const tomorrowDate = getLocalTomorrow();
+      const interpreted = await interpretImageMessage(base64, imageMimeType, text, planDate, tomorrowDate);
+      console.log('[bot] [CAL v2] image understanding result:', JSON.stringify(interpreted).slice(0, 300));
+
+      if (interpreted.type === 'app_action') {
+        if (interpreted.confidence === 'low') {
+          await reply(interpreted.follow_up_question ?? 'Could you be more specific?');
+          return;
+        }
+        if (interpreted.confirm_needed) {
+          setSession(chatId, { state: 'pending_confirmation', pendingIntent: interpreted.intent });
+          await reply(`${interpreted.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
+          return;
+        }
+        const result = await executeIntent(interpreted.intent);
+        await reply(result.message);
+
+        if (result.success && result.data && typeof result.data === 'object') {
+          if ('affectsDate' in result.data) {
+            await maybeRegeneratePlanAfterCalendarChange(result.data as { affectsDate: string }, reply);
+          }
+          if ('affectsDates' in result.data) {
+            const dates = [...new Set((result.data as { affectsDates: string[] }).affectsDates)];
+            for (const d of dates) {
+              await maybeRegeneratePlanAfterCalendarChange({ affectsDate: d }, reply);
+            }
+          }
+        }
+      } else if (interpreted.type === 'answer') {
+        await reply(interpreted.text);
+      } else if (interpreted.type === 'clarify') {
+        await reply(interpreted.question);
+      } else if (interpreted.type === 'casual') {
+        await reply(interpreted.reply);
+      }
+    } else {
+      // Route to image editing
+      if (!isImageEditConfigured()) {
+        await reply('Image editing is not configured. Ask the admin to set GOOGLE_AI_API_KEY.');
+        return;
+      }
+      await reply('Editing image...');
+      try {
+        const result = await editImage(imageBuffer, imageMimeType, text);
+        pendingImageReplies.set(chatId, result);
+        if (result.description) await reply(result.description);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await reply(`Image edit failed — ${msg.slice(0, 80)}`);
+      }
     }
     return;
   }
@@ -1083,6 +1134,18 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         ) {
           await maybeRegeneratePlanAfterCalendarChange(result.data as { affectsDate: string }, reply);
         }
+        // Bulk calendar creation — check all affected dates
+        if (
+          result.success &&
+          result.data && typeof result.data === 'object' && 'affectsDates' in result.data &&
+          appIntent.intent === 'calendar_create_events_bulk'
+        ) {
+          const dates = (result.data as { affectsDates: string[] }).affectsDates;
+          const uniqueDates = [...new Set(dates)];
+          for (const d of uniqueDates) {
+            await maybeRegeneratePlanAfterCalendarChange({ affectsDate: d }, reply);
+          }
+        }
       }
       return;
     }
@@ -1305,40 +1368,105 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// Handle photo messages — image editing via Gemini
+// Handle photo messages — image editing OR image understanding
 bot.on('photo', async (ctx) => {
   const chatId = ctx.chat.id;
 
-  if (!isImageEditConfigured()) {
-    await ctx.reply('Image editing is not configured. Ask the admin to set GOOGLE_AI_API_KEY.');
-    return;
-  }
-
   try {
-    // Use the highest-resolution version
     const photos = ctx.message.photo;
     const photo = photos[photos.length - 1];
     const caption = ctx.message.caption?.trim();
 
     const fileUrl = await getFilePath(process.env.TELEGRAM_BOT_TOKEN!, photo.file_id);
-    const imageBuffer = await downloadVoiceNote(fileUrl); // reuse same HTTP downloader
+    const imageBuffer = await downloadVoiceNote(fileUrl);
     const mimeType = 'image/jpeg';
 
-    if (caption) {
-      // Edit immediately using caption as the prompt
+    // Determine intent: editing vs understanding
+    const imageIntent = caption ? classifyImageIntent(caption) : 'no_caption';
+    console.log('[bot] photo handler: intent=', imageIntent, 'caption=', caption?.slice(0, 60));
+
+    if (imageIntent === 'edit') {
+      // --- Image editing path (Gemini) ---
+      if (!isImageEditConfigured()) {
+        await ctx.reply('Image editing is not configured. Ask the admin to set GOOGLE_AI_API_KEY.');
+        return;
+      }
       await ctx.reply('Editing image...');
-      const result = await editImage(imageBuffer, mimeType, caption);
+      const result = await editImage(imageBuffer, mimeType, caption!);
       if (result.description) await ctx.reply(result.description);
       await ctx.replyWithPhoto({ source: result.imageBuffer });
+
+    } else if (imageIntent === 'understand') {
+      // --- Image understanding path (Claude vision) ---
+      console.log('[bot] [CAL v2] routing to image understanding via Claude vision');
+      const base64 = imageBuffer.toString('base64');
+      const planDate = getLocalToday();
+      const tomorrowDate = getLocalTomorrow();
+
+      const intent = await interpretImageMessage(base64, mimeType, caption!, planDate, tomorrowDate);
+      console.log('[bot] [CAL v2] image interpretation result:', JSON.stringify(intent).slice(0, 300));
+
+      // Route the interpreted intent through the same dispatch as text messages
+      if (intent.type === 'app_action') {
+        const appIntent = intent.intent;
+        console.log('[bot] [CAL v2] image → app_action/', appIntent.intent, 'confidence:', intent.confidence);
+
+        if (intent.confidence === 'low') {
+          await ctx.reply(intent.follow_up_question ?? 'Could you be more specific about what you want from this image?');
+          return;
+        }
+
+        if (intent.confirm_needed) {
+          setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
+          await ctx.reply(`${intent.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
+          return;
+        }
+
+        const result = await executeIntent(appIntent);
+        await ctx.reply(result.message);
+
+        // Day plan regeneration for calendar mutations
+        if (result.success && result.data && typeof result.data === 'object') {
+          if ('affectsDate' in result.data) {
+            await maybeRegeneratePlanAfterCalendarChange(
+              result.data as { affectsDate: string },
+              (msg: string) => ctx.reply(msg) as unknown as Promise<unknown>,
+            );
+          }
+          if ('affectsDates' in result.data) {
+            const dates = [...new Set((result.data as { affectsDates: string[] }).affectsDates)];
+            for (const d of dates) {
+              await maybeRegeneratePlanAfterCalendarChange(
+                { affectsDate: d },
+                (msg: string) => ctx.reply(msg) as unknown as Promise<unknown>,
+              );
+            }
+          }
+        }
+
+      } else if (intent.type === 'answer') {
+        await ctx.reply(intent.text);
+      } else if (intent.type === 'clarify') {
+        await ctx.reply(intent.question);
+      } else if (intent.type === 'casual') {
+        await ctx.reply(intent.reply);
+      }
+
     } else {
-      // Ask for the edit prompt
-      setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
-      await ctx.reply('Got the image. What would you like me to do with it?\n\nDescribe the edit (e.g. "make the background white", "add a drop shadow", "adjust brightness +20%").');
+      // No caption — ask what they want
+      if (isImageEditConfigured()) {
+        setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
+        await ctx.reply('Got the image. What would you like me to do with it?\n\nI can edit it (e.g. "make the background white") or extract info (e.g. "add these events to my calendar").');
+      } else {
+        // No image editing available, but can still understand
+        setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
+        await ctx.reply('Got the image. What would you like me to do with it?\n\nFor example: "add these to my calendar", "turn this into tasks", or "what does this say?"');
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[bot] photo handler error for chat', chatId, ':', msg);
-    await ctx.reply(`Couldn't edit that image — ${msg.slice(0, 80)}`);
+    await ctx.reply(`Couldn't process that image — ${msg.slice(0, 80)}`);
   }
 });
 

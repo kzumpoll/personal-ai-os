@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Intent, CalendarCreateEventIntent, CalendarUpdateEventIntent, CalendarDeleteEventIntent } from './intents';
 import { routeClassified, type ClassifiedMessage } from './intents';
+import { classifyImageIntent } from './claude';
 
 // ---------------------------------------------------------------------------
 // Test 1: Calendar create intents structure
@@ -299,4 +300,47 @@ describe('no-access guardrail', () => {
     expect(badClassification.text.toLowerCase()).toContain("can't");
     expect(badClassification.text.toLowerCase()).toContain('calendar');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Test 10: Image intent classification — editing vs understanding
+// ---------------------------------------------------------------------------
+describe('classifyImageIntent', () => {
+  const understandCaptions = [
+    'Add these 2 matches to my calendar',
+    'Schedule both of these games',
+    'Add this to my calendar',
+    'Turn this screenshot into tasks',
+    'What are the times in this image?',
+    'Schedule these events',
+    'Put these matches in my calendar',
+    'Turn this screenshot into calendar events',
+    'What does this say?',
+    'Extract the event details',
+    'List the items in this image',
+    'When is the next match?',
+  ];
+
+  const editCaptions = [
+    'Make the background white',
+    'Remove this object',
+    'Improve this logo',
+    'Crop to square',
+    'Add a drop shadow',
+    'Adjust brightness +20%',
+    'Sharpen this image',
+    'Rotate 90 degrees',
+  ];
+
+  for (const caption of understandCaptions) {
+    it(`"${caption}" → understand`, () => {
+      expect(classifyImageIntent(caption)).toBe('understand');
+    });
+  }
+
+  for (const caption of editCaptions) {
+    it(`"${caption}" → edit`, () => {
+      expect(classifyImageIntent(caption)).toBe('edit');
+    });
+  }
 });

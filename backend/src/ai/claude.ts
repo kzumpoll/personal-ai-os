@@ -978,6 +978,174 @@ Message: ${userMessage}`;
 }
 
 // ---------------------------------------------------------------------------
+// Image understanding — interpret an image + message via Claude vision
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine whether a caption is asking for image editing or image understanding.
+ * Returns 'edit' for visual manipulation requests, 'understand' for everything else.
+ */
+export function classifyImageIntent(caption: string): 'edit' | 'understand' {
+  const lower = caption.toLowerCase();
+  const editPatterns = /\b(make|change|remove|adjust|crop|resize|rotate|flip|brighten|darken|sharpen|blur|enhance|improve|retouch|recolor|add shadow|drop shadow|background|filter|contrast|saturation|hue|exposure|overlay|watermark|logo|text on|write on)\b/;
+  const understandPatterns = /\b(add.*(calendar|schedule|task)|schedule|what|when|where|extract|read|turn.*into|create.*from|put.*in.*calendar|list|summarize|interpret|tell me|show me)\b/;
+
+  // If it matches understanding patterns, it's understanding
+  if (understandPatterns.test(lower)) return 'understand';
+  // If it matches edit patterns, it's editing
+  if (editPatterns.test(lower)) return 'edit';
+  // Default: understanding (safer — doesn't lose user's intent)
+  return 'understand';
+}
+
+/**
+ * Interpret an image + user message through Claude vision.
+ * Returns the same UserIntent type as interpretUserIntent, allowing
+ * image-based messages to produce calendar actions, task creation, etc.
+ */
+export async function interpretImageMessage(
+  imageBase64: string,
+  imageMimeType: string,
+  userMessage: string,
+  planDate: string,
+  tomorrowDate: string,
+): Promise<UserIntent> {
+  const systemPrompt = `You are a personal assistant in a Telegram bot. The user has sent you an image with a message.
+
+Your job: look at the image, understand what the user wants to accomplish, and return a structured JSON response.
+
+Always respond with a single JSON object. No prose outside the JSON.
+
+The system has FULL Google Calendar read/write access. You CAN create, update, and delete calendar events.
+
+Today: ${planDate}
+Tomorrow: ${tomorrowDate}
+
+━━━ What you can do ━━━
+
+When the user wants to create calendar events from the image:
+- Extract event details: title, date, time, duration, location
+- Return one app_action per event if there's a single event
+- Return multiple events using calendar_create_events_bulk if there are 2+ events
+- Resolve relative dates using Today/Tomorrow above
+- Default event duration: 1 hour (unless visible in the image)
+- If a detail is ambiguous or missing, set confidence to "low" and ask
+
+━━━ JSON schemas ━━━
+
+FOR a single calendar event:
+{
+  "type": "app_action",
+  "intent": {
+    "intent": "calendar_create_event",
+    "data": { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "location": "...", "description": "..." }
+  },
+  "confirm_needed": false,
+  "confidence": "high",
+  "user_facing_summary": "..."
+}
+
+FOR multiple calendar events:
+{
+  "type": "app_action",
+  "intent": {
+    "intent": "calendar_create_events_bulk",
+    "data": {
+      "events": [
+        { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "location": "...", "description": "..." },
+        { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "location": "...", "description": "..." }
+      ]
+    }
+  },
+  "confirm_needed": false,
+  "confidence": "high",
+  "user_facing_summary": "..."
+}
+
+FOR tasks from the image:
+{
+  "type": "app_action",
+  "intent": {
+    "intent": "create_tasks_bulk",
+    "data": { "tasks": [{ "title": "...", "due_date": "YYYY-MM-DD" }] }
+  },
+  "confirm_needed": false,
+  "confidence": "high",
+  "user_facing_summary": "..."
+}
+
+FOR answering a question about the image:
+{
+  "type": "answer",
+  "text": "..."
+}
+
+FOR asking clarification:
+{
+  "type": "clarify",
+  "question": "..."
+}
+
+Confidence rules:
+- high: all event details are clearly visible
+- medium: some details inferred but reasonable
+- low: key details missing or ambiguous — include follow_up_question
+
+Do NOT show robotic phrases. Speak naturally.`;
+
+  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: imageMimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+              data: imageBase64,
+            },
+          },
+          {
+            type: 'text',
+            text: userMessage,
+          },
+        ],
+      }],
+    });
+  } catch (apiErr) {
+    const apiMsg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+    console.error('[claude] interpretImageMessage API error:', apiMsg);
+    return { type: 'casual', reply: "I couldn't process that image right now — please try again." };
+  }
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  console.log('[interpretImageMessage] raw response:', text.slice(0, 300));
+
+  try {
+    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+    const parsed = JSON.parse(cleaned) as UserIntent;
+
+    if (parsed.type === 'app_action' && parsed.intent && !(parsed.intent as unknown as Record<string, unknown>).data) {
+      (parsed.intent as unknown as Record<string, unknown>).data = {};
+    }
+
+    console.log(`[interpretImageMessage] type:${parsed.type} | ${
+      parsed.type === 'app_action' ? `intent:${parsed.intent.intent} confidence:${parsed.confidence}` : parsed.type
+    }`);
+
+    return parsed;
+  } catch {
+    console.error('[interpretImageMessage] parse error — raw:', text.slice(0, 200));
+    return { type: 'casual', reply: "I saw the image but couldn't figure out what to do — could you describe what you'd like?" };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Within Notion proposal generation
 // ---------------------------------------------------------------------------
 

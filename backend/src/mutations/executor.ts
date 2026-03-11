@@ -872,6 +872,75 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
       };
     }
 
+    case 'calendar_create_events_bulk': {
+      console.log('[executor] [CAL v2] calendar_create_events_bulk hit, count:', intent.data.events?.length);
+      if (!isCalendarConfigured()) {
+        return { success: false, message: '[CAL v2] Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
+      }
+      const events = intent.data.events;
+      if (!Array.isArray(events) || events.length === 0) {
+        return { success: false, message: 'No events found to create.' };
+      }
+
+      const created: string[] = [];
+      const failed: string[] = [];
+      const affectsDates: string[] = [];
+
+      for (const ev of events) {
+        try {
+          const result = await createCalendarEvent({
+            title: ev.title,
+            startDateTime: ev.start_datetime,
+            endDateTime: ev.end_datetime,
+            allDay: ev.all_day,
+            description: ev.description,
+            location: ev.location,
+          });
+          if (result) {
+            const dateStr = fmtDate(ev.start_datetime.slice(0, 10));
+            const timeStr = result.allDay
+              ? 'All day'
+              : `${formatEventTime(result.start)}–${formatEventTime(result.end)}`;
+            const locStr = ev.location ? ` — ${ev.location}` : '';
+            created.push(`${result.title}\n${dateStr}, ${timeStr}${locStr}`);
+            affectsDates.push(ev.start_datetime.slice(0, 10));
+            try {
+              await logMutation({
+                action: 'create',
+                table_name: 'calendar_events',
+                before_data: null,
+                after_data: { ...result, calendar_event_id: result.id } as unknown as Record<string, unknown>,
+              });
+            } catch (logErr) {
+              console.error('[executor] [CAL v2] mutation log failed (bulk create), continuing:', logErr instanceof Error ? logErr.message : logErr);
+            }
+          } else {
+            failed.push(ev.title);
+          }
+        } catch (err) {
+          console.error('[executor] [CAL v2] bulk create failed for:', ev.title, err instanceof Error ? err.message : err);
+          failed.push(ev.title);
+        }
+      }
+
+      console.log('[executor] [CAL v2] bulk calendar events inserted:', created.length, 'failed:', failed.length);
+
+      const lines: string[] = [];
+      if (created.length > 0) {
+        lines.push(`[CAL v2] Added ${created.length} event${created.length > 1 ? 's' : ''} to calendar:\n`);
+        lines.push(...created);
+      }
+      if (failed.length > 0) {
+        lines.push(`\nFailed to add: ${failed.join(', ')}`);
+      }
+
+      return {
+        success: created.length > 0,
+        message: lines.join('\n'),
+        data: { affectsDates },
+      };
+    }
+
     case 'calendar_update_event': {
       if (!isCalendarConfigured()) {
         return { success: false, message: 'Google Calendar is not configured.' };
