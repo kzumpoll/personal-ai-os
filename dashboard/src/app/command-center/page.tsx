@@ -28,6 +28,28 @@ interface BackendHealth {
   deployed_at: string | null;
 }
 
+interface GitCommit {
+  sha: string;
+  commit: { message: string; author: { date: string } };
+}
+
+async function getRecentCommits(): Promise<GitCommit[]> {
+  const owner = process.env.VERCEL_GIT_REPO_OWNER;
+  const repo = process.env.VERCEL_GIT_REPO_SLUG;
+  if (!owner || !repo) return [];
+  try {
+    const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
+    const token = process.env.GITHUB_TOKEN;
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`,
+      { headers, next: { revalidate: 300 } }
+    );
+    if (!res.ok) return [];
+    return res.json() as Promise<GitCommit[]>;
+  } catch { return []; }
+}
+
 async function getData() {
   const today = getLocalToday();
   const empty = {
@@ -37,6 +59,7 @@ async function getData() {
     completedToday: [] as Task[], todayStr: today,
     claudeStatus: null as ClaudeStatus | null,
     backendHealth: null as BackendHealth | null,
+    recentCommits: [] as GitCommit[],
   };
 
   try {
@@ -60,9 +83,9 @@ async function getData() {
       ).catch(() => ({ rows: [] as ClaudeStatus[] })),
     ]);
 
-    // Fetch backend health in parallel with the completed-today query
+    // Fetch backend health + recent commits in parallel with the completed-today query
     const backendUrl = process.env.BACKEND_URL;
-    const [completedTodayTasks, backendHealthRes] = await Promise.all([
+    const [completedTodayTasks, backendHealthRes, recentCommits] = await Promise.all([
       pool.query<Task>(
         `SELECT * FROM tasks WHERE status = 'done' AND completed_at::date = $1 ORDER BY completed_at DESC LIMIT 8`,
         [today]
@@ -72,6 +95,7 @@ async function getData() {
             .then((r) => r.json() as Promise<BackendHealth>)
             .catch(() => null)
         : Promise.resolve(null),
+      getRecentCommits(),
     ]);
 
     const result = {
@@ -86,6 +110,7 @@ async function getData() {
       todayStr:     today,
       claudeStatus: claudeRes.rows[0] ?? null,
       backendHealth: backendHealthRes,
+      recentCommits,
     };
     console.log(
       `[command-center] query results — open:${result.openCount} overdue:${result.overdueCount}` +
@@ -180,7 +205,7 @@ function fmtTime(ts: string): string {
 export default async function CommandCenterPage() {
   const {
     openCount, overdueCount, doneCount,
-    journal, mutations, ideas, thoughts, completedToday, todayStr, claudeStatus, backendHealth,
+    journal, mutations, ideas, thoughts, completedToday, todayStr, claudeStatus, backendHealth, recentCommits,
   } = await getData();
 
   const dateLabel = format(new Date(getLocalToday() + 'T12:00:00'), 'EEEE, MMMM d');
@@ -362,6 +387,40 @@ export default async function CommandCenterPage() {
                       </span>
                     )}
                   </div>
+                </div>
+              </Card>
+            );
+          })()}
+
+          {/* Recent commits */}
+          {recentCommits.length > 0 && (() => {
+            const deployedSha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+            const latestSha = recentCommits[0]?.sha.slice(0, 7);
+            const behind = deployedSha && latestSha && deployedSha !== latestSha;
+            return (
+              <Card>
+                <SectionTitle>Recent Commits</SectionTitle>
+                {behind && (
+                  <div className="mb-2">
+                    <span style={{ fontSize: '10px', color: 'var(--amber)' }}>⚠ build [{deployedSha}] is behind latest [{latestSha}]</span>
+                  </div>
+                )}
+                <div className="flex flex-col gap-2">
+                  {recentCommits.map((c) => {
+                    const sha = c.sha.slice(0, 7);
+                    const msg = c.commit.message.split('\n')[0].slice(0, 60);
+                    const ago = formatDistanceToNow(new Date(c.commit.author.date), { addSuffix: true });
+                    const isCurrent = sha === deployedSha;
+                    return (
+                      <div key={c.sha} className="flex items-start gap-2">
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: isCurrent ? 'var(--cyan)' : 'var(--text-faint)', minWidth: 52, flexShrink: 0 }}>
+                          {isCurrent ? `▶ ${sha}` : sha}
+                        </span>
+                        <span className="text-xs truncate flex-1" style={{ color: isCurrent ? 'var(--text)' : 'var(--text-dim)' }}>{msg}</span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)', flexShrink: 0 }}>{ago}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </Card>
             );

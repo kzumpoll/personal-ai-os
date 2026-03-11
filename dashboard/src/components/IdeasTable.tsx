@@ -126,7 +126,7 @@ export default function IdeasTable({ ideas }: Props) {
       .sort((a, b) => {
         const od = actionOrder(a.actionability) - actionOrder(b.actionability);
         if (od !== 0) return od;
-        return b.created_at.localeCompare(a.created_at);
+        return String(b.created_at).localeCompare(String(a.created_at));
       });
     return { statusKey, cfg: STATUS_CONFIG[statusKey], items };
   }).filter((g) => g.items.length > 0);
