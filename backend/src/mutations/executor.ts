@@ -848,13 +848,17 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
       if (!event) {
         return { success: false, message: 'Could not create the calendar event. Please try again.' };
       }
-      await logMutation({
-        action: 'create',
-        table_name: 'calendar_events',
-        record_id: event.id,
-        before_data: null,
-        after_data: event as unknown as Record<string, unknown>,
-      });
+      try {
+        await logMutation({
+          action: 'create',
+          table_name: 'calendar_events',
+          before_data: null,
+          after_data: { ...event, calendar_event_id: event.id } as unknown as Record<string, unknown>,
+        });
+      } catch (logErr) {
+        console.error('[executor] [CAL v2] mutation log failed (create), continuing:', logErr instanceof Error ? logErr.message : logErr);
+      }
+      console.log('[executor] [CAL v2] calendar event inserted');
       const dateStr = fmtDate(start_datetime.slice(0, 10));
       const timeStr = event.allDay
         ? 'All day'
@@ -916,13 +920,16 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         return { success: false, message: `Could not update "${targetEvent.title}". Please try again.` };
       }
 
-      await logMutation({
-        action: 'update',
-        table_name: 'calendar_events',
-        record_id: targetEvent.id,
-        before_data: before as unknown as Record<string, unknown>,
-        after_data: updated as unknown as Record<string, unknown>,
-      });
+      try {
+        await logMutation({
+          action: 'update',
+          table_name: 'calendar_events',
+          before_data: { ...before, calendar_event_id: targetEvent.id } as unknown as Record<string, unknown>,
+          after_data: { ...updated, calendar_event_id: targetEvent.id } as unknown as Record<string, unknown>,
+        });
+      } catch (logErr) {
+        console.error('[executor] [CAL v2] mutation log failed (update), continuing:', logErr instanceof Error ? logErr.message : logErr);
+      }
 
       const changeDesc = new_start_datetime
         ? `to ${formatEventTime(new_start_datetime)}`
@@ -974,12 +981,15 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         return { success: false, message: `Could not delete "${targetEvent.title}". Please try again.` };
       }
 
-      await logMutation({
-        action: 'delete',
-        table_name: 'calendar_events',
-        record_id: targetEvent.id,
-        before_data: targetEvent as unknown as Record<string, unknown>,
-      });
+      try {
+        await logMutation({
+          action: 'delete',
+          table_name: 'calendar_events',
+          before_data: { ...targetEvent, calendar_event_id: targetEvent.id } as unknown as Record<string, unknown>,
+        });
+      } catch (logErr) {
+        console.error('[executor] [CAL v2] mutation log failed (delete), continuing:', logErr instanceof Error ? logErr.message : logErr);
+      }
 
       const affectsDate = targetEvent.start.slice(0, 10);
       return {
