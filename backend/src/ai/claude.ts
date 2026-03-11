@@ -988,7 +988,7 @@ Message: ${userMessage}`;
 export function classifyImageIntent(caption: string): 'edit' | 'understand' {
   const lower = caption.toLowerCase();
   const editPatterns = /\b(make|change|remove|adjust|crop|resize|rotate|flip|brighten|darken|sharpen|blur|enhance|improve|retouch|recolor|add shadow|drop shadow|background|filter|contrast|saturation|hue|exposure|overlay|watermark|logo|text on|write on)\b/;
-  const understandPatterns = /\b(add.*(calendar|schedule|task)|schedule|what|when|where|extract|read|turn.*into|create.*from|put.*in.*calendar|list|summarize|interpret|tell me|show me)\b/;
+  const understandPatterns = /\b(add.*(calendar|schedule|task)|schedule|what|when|where|extract|read|turn.*into|create.*from|put.*in.*calendar|list|summarize|interpret|tell me|show me|convert|timezone|time.?zone|my time|local time|bali time|for me)\b/;
 
   // If it matches understanding patterns, it's understanding
   if (understandPatterns.test(lower)) return 'understand';
@@ -1001,7 +1001,7 @@ export function classifyImageIntent(caption: string): 'edit' | 'understand' {
 /**
  * Interpret an image + user message through Claude vision.
  * Returns the same UserIntent type as interpretUserIntent, allowing
- * image-based messages to produce calendar actions, task creation, etc.
+ * image-based messages to produce calendar actions, task creation, answers, etc.
  */
 export async function interpretImageMessage(
   imageBase64: string,
@@ -1010,9 +1010,11 @@ export async function interpretImageMessage(
   planDate: string,
   tomorrowDate: string,
 ): Promise<UserIntent> {
+  const userTz = process.env.USER_TZ ?? 'UTC';
   const systemPrompt = `You are a personal assistant in a Telegram bot. The user has sent you an image with a message.
 
-Your job: look at the image, understand what the user wants to accomplish, and return a structured JSON response.
+Your job: look at the image carefully, understand what the user wants, and return a structured JSON response.
+Treat the image and the message as ONE joint input. The message may be short or vague — use the image content to fill in meaning.
 
 Always respond with a single JSON object. No prose outside the JSON.
 
@@ -1020,16 +1022,27 @@ The system has FULL Google Calendar read/write access. You CAN create, update, a
 
 Today: ${planDate}
 Tomorrow: ${tomorrowDate}
+User timezone: ${userTz}
 
-━━━ What you can do ━━━
+━━━ How to interpret ━━━
 
-When the user wants to create calendar events from the image:
-- Extract event details: title, date, time, duration, location
-- Return one app_action per event if there's a single event
-- Return multiple events using calendar_create_events_bulk if there are 2+ events
-- Resolve relative dates using Today/Tomorrow above
-- Default event duration: 1 hour (unless visible in the image)
-- If a detail is ambiguous or missing, set confidence to "low" and ask
+Step 1: Read the image thoroughly. Extract all visible text, dates, times, names, locations, and structure.
+Step 2: Read the user's message. It may be a short instruction like "add these" or a question like "what time is this for me?"
+Step 3: Combine both to determine what the user wants.
+
+Common patterns:
+- "add these to my calendar" / "schedule these" / "put these in my calendar" → extract events, return calendar intents
+- "what are these to my timezone?" / "convert to Bali time" / "what time is this for me?" → read times from image, convert to ${userTz}, return answer
+- "turn this into tasks" / "make tasks from this" → extract action items, return create_tasks_bulk
+- "what does this say?" / "summarize this" / "read this" → extract and summarize image content, return answer
+- "what times are shown?" / "when are these?" → extract and list times/dates from image, return answer
+- "add these 2 matches" → count matches what's visible, extract event details, return calendar bulk intent
+
+For timezone conversion:
+- Identify the source timezone from the image (look for timezone indicators, city names, UTC offsets)
+- Convert all times to ${userTz}
+- If the source timezone is unclear, make your best guess from context and mention the assumption
+- Format the answer clearly with both original and converted times
 
 ━━━ JSON schemas ━━━
 
@@ -1052,7 +1065,6 @@ FOR multiple calendar events:
     "intent": "calendar_create_events_bulk",
     "data": {
       "events": [
-        { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "location": "...", "description": "..." },
         { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "location": "...", "description": "..." }
       ]
     }
@@ -1074,22 +1086,25 @@ FOR tasks from the image:
   "user_facing_summary": "..."
 }
 
-FOR answering a question about the image:
+FOR answering a question about the image (timezone conversions, summaries, reading text, etc.):
 {
   "type": "answer",
-  "text": "..."
+  "text": "your clear, helpful answer here"
 }
 
-FOR asking clarification:
+FOR asking clarification (ONLY when genuinely ambiguous — prefer attempting an answer):
 {
   "type": "clarify",
-  "question": "..."
+  "question": "short specific question"
 }
 
-Confidence rules:
-- high: all event details are clearly visible
-- medium: some details inferred but reasonable
-- low: key details missing or ambiguous — include follow_up_question
+━━━ Important rules ━━━
+- ALWAYS attempt to answer or act. Do not give up easily.
+- If the user asks a question about the image, answer it directly using type "answer".
+- If you can read the image but are unsure what the user wants, provide a helpful answer about what you see AND ask what they'd like to do with it — do NOT just say you couldn't figure it out.
+- For timezone questions: extract times, convert, and answer. This is a common request.
+- Calendar event datetimes must be in ${userTz} (the user's local timezone).
+- Confidence: high = all details clear; medium = some inferred; low = key details missing.
 
 Do NOT show robotic phrases. Speak naturally.`;
 
@@ -1140,8 +1155,13 @@ Do NOT show robotic phrases. Speak naturally.`;
 
     return parsed;
   } catch {
-    console.error('[interpretImageMessage] parse error — raw:', text.slice(0, 200));
-    return { type: 'casual', reply: "I saw the image but couldn't figure out what to do — could you describe what you'd like?" };
+    console.error('[interpretImageMessage] parse error — raw:', text.slice(0, 300));
+    // If Claude returned prose instead of JSON, use it as an answer rather than failing
+    if (text.length > 10) {
+      console.log('[interpretImageMessage] falling back to raw text as answer');
+      return { type: 'answer', text: text.slice(0, 2000) };
+    }
+    return { type: 'clarify', question: "I can see the image, but I'm not sure what you'd like me to do with it. Would you like me to convert times, summarize the content, or create calendar events?" };
   }
 }
 

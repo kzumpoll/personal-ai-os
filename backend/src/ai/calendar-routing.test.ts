@@ -319,6 +319,16 @@ describe('classifyImageIntent', () => {
     'Extract the event details',
     'List the items in this image',
     'When is the next match?',
+    // Timezone conversion
+    'What are these to my timezone?',
+    'Convert these to Bali time',
+    'What time is this for me?',
+    'Turn these into my local time',
+    'When are these for me?',
+    // General questions
+    'Summarize this screenshot',
+    'Read this for me',
+    'Tell me what this says',
   ];
 
   const editCaptions = [
