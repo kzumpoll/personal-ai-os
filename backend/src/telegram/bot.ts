@@ -1,7 +1,15 @@
 import { Telegraf } from 'telegraf';
 import { Express } from 'express';
 import { buildContextPack, determineDebriefDates } from '../ai/context';
-import { interpretUserIntent, interpretDebriefReply, confirmDebriefSummary, DayPlanMutation } from '../ai/claude';
+import {
+  interpretUserIntent,
+  interpretDebriefReply,
+  confirmDebriefSummary,
+  applyDebriefCorrection,
+  interpretCheckinReply,
+  formatCheckinSummary,
+  DayPlanMutation,
+} from '../ai/claude';
 import { captureToIntent } from '../ai/intents';
 import { executeIntent, fmtDate } from '../mutations/executor';
 import {
@@ -16,6 +24,9 @@ import {
   extractPositionalNumbers,
 } from './session';
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
+import { editImage, isImageEditConfigured } from '../services/imageEdit';
+import { schedulerEvents, CheckinPromptEvent } from '../services/scheduler';
+import { createReview } from '../db/queries/reviews';
 import { getTasksDueOnOrBefore, getTasksForDate, getOverdueTasks } from '../db/queries/tasks';
 import { executeToolCall } from '../tools/weather';
 import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, setFocusCompletion, IgnoredEventSnapshot, ScheduleBlock } from '../db/queries/day_plans';
@@ -46,6 +57,16 @@ function getHistory(chatId: number): Array<{ role: 'user' | 'bot'; text: string 
 if (!process.env.TELEGRAM_BOT_TOKEN) throw new Error('TELEGRAM_BOT_TOKEN is required');
 
 export const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
+
+// Registry for edited images that need to be sent as photos after handleText returns.
+// handleText only has access to a text-reply function, so edited image buffers are
+// stored here and sent by the bot.on('text') caller.
+interface PendingImageReply {
+  imageBuffer: Buffer;
+  mimeType: string;
+  description: string | null;
+}
+const pendingImageReplies = new Map<number, PendingImageReply>();
 
 // ---------------------------------------------------------------------------
 // Day plan helpers
@@ -569,12 +590,12 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     }
 
     const summary = await confirmDebriefSummary(intent, debriefTasks);
-    setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: intent });
+    setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: intent, tasks: debriefTasks });
     await reply(summary);
     return;
   }
 
-  // --- Debrief: awaiting confirmation ---
+  // --- Debrief: awaiting confirmation (with inline correction support) ---
   if (session.state === 'debrief_awaiting_confirmation') {
     if (lower === 'yes' || lower === 'y' || lower === 'confirm') {
       console.log('[bot] debrief_awaiting_confirmation confirmed → executing save_debrief');
@@ -588,10 +609,120 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         console.error('[bot] debrief confirm error:', msg);
         await reply('Something went wrong saving the debrief. Please try /debrief again.');
       }
-    } else {
+    } else if (isNegative(lower)) {
       clearSession(chatId);
       console.log('[bot] debrief_awaiting_confirmation cancelled/denied');
       await reply('Got it, debrief not saved.');
+    } else {
+      // Treat as a correction to the draft
+      console.log('[bot] debrief_awaiting_confirmation — applying correction:', text.slice(0, 80));
+      const currentData = (session.pendingIntent.intent === 'save_debrief' ? session.pendingIntent.data : {}) as Record<string, unknown>;
+      const updatedIntent = await applyDebriefCorrection(currentData, text);
+
+      if (!updatedIntent || updatedIntent.intent !== 'save_debrief') {
+        await reply("I couldn't apply that correction. Try again or say \"yes\" to save as-is, or \"no\" to cancel.");
+        return;
+      }
+
+      const tasks = session.tasks;
+      const newSummary = await confirmDebriefSummary(updatedIntent, tasks);
+      setSession(chatId, {
+        state: 'debrief_awaiting_confirmation',
+        debriefDate: session.debriefDate,
+        planDate: session.planDate,
+        pendingIntent: updatedIntent,
+        tasks,
+      });
+      await reply(`Updated ✓\n\n${newSummary}`);
+    }
+    return;
+  }
+
+  // --- Check-in: awaiting freeform input ---
+  if (session.state === 'checkin_awaiting_input') {
+    if (isNegative(lower) || lower === 'cancel') {
+      clearSession(chatId);
+      await reply('Check-in cancelled.');
+      return;
+    }
+    const { weekLabel, periodStart, periodEnd } = session;
+    console.log('[bot] checkin_awaiting_input → parsing reply for', weekLabel);
+    const checkinData = await interpretCheckinReply(text);
+    const summary = formatCheckinSummary(checkinData, weekLabel);
+    setSession(chatId, {
+      state: 'checkin_awaiting_confirmation',
+      weekLabel,
+      periodStart,
+      periodEnd,
+      checkinData,
+    });
+    await reply(summary);
+    return;
+  }
+
+  // --- Check-in: awaiting confirmation (with correction support) ---
+  if (session.state === 'checkin_awaiting_confirmation') {
+    const { weekLabel, periodStart, periodEnd, checkinData } = session;
+
+    if (lower === 'yes' || lower === 'y' || lower === 'confirm') {
+      console.log('[bot] checkin_awaiting_confirmation confirmed → saving');
+      try {
+        await createReview({
+          review_type: 'weekly_checkin',
+          period_start: periodStart,
+          period_end: periodEnd,
+          content: {
+            ...checkinData,
+            week_label: weekLabel,
+            captured_at: new Date().toISOString(),
+          },
+        });
+        clearSession(chatId);
+        await reply(`Check-in saved ✓ Good work reflecting on your week.${checkinData.suggested_tasks?.length ? `\n\nSuggested tasks to consider:\n${checkinData.suggested_tasks.map((t) => `• ${t}`).join('\n')}` : ''}`);
+      } catch (err) {
+        clearSession(chatId);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[bot] checkin save error:', msg);
+        await reply('Something went wrong saving the check-in. Please try again.');
+      }
+    } else if (isNegative(lower)) {
+      clearSession(chatId);
+      await reply('Check-in discarded.');
+    } else {
+      // Correction: re-parse with the original reply + correction appended
+      const corrected = await interpretCheckinReply(`${text}`);
+      const merged = { ...checkinData, ...Object.fromEntries(Object.entries(corrected).filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0))) };
+      const newSummary = formatCheckinSummary(merged as typeof checkinData, weekLabel);
+      setSession(chatId, {
+        state: 'checkin_awaiting_confirmation',
+        weekLabel,
+        periodStart,
+        periodEnd,
+        checkinData: merged as typeof checkinData,
+      });
+      await reply(`Updated ✓\n\n${newSummary}`);
+    }
+    return;
+  }
+
+  // --- Image edit: awaiting prompt ---
+  if (session.state === 'image_awaiting_prompt') {
+    if (isNegative(lower) || lower === 'cancel') {
+      clearSession(chatId);
+      await reply('Image edit cancelled.');
+      return;
+    }
+    const { imageBuffer, imageMimeType } = session;
+    clearSession(chatId);
+    await reply('Editing image...');
+    try {
+      const result = await editImage(imageBuffer, imageMimeType, text);
+      // Store the edited image — bot.on('text') will pick it up and send it as a photo
+      pendingImageReplies.set(chatId, result);
+      if (result.description) await reply(result.description);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await reply(`Image edit failed — ${msg.slice(0, 80)}`);
     }
     return;
   }
@@ -855,6 +986,13 @@ bot.on('text', async (ctx) => {
 
   try {
     await handleText(chatId, text, (msg) => ctx.reply(msg));
+
+    // Send any pending edited image produced by the image_awaiting_prompt flow
+    const pending = pendingImageReplies.get(chatId);
+    if (pending) {
+      pendingImageReplies.delete(chatId);
+      await ctx.replyWithPhoto({ source: pending.imageBuffer });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const code = (err as Record<string, unknown>)?.code;
@@ -880,6 +1018,43 @@ bot.on('text', async (ctx) => {
     } else {
       await ctx.reply(`Sorry, something went wrong (${msg.slice(0, 60)}). Please try again.`);
     }
+  }
+});
+
+// Handle photo messages — image editing via Gemini
+bot.on('photo', async (ctx) => {
+  const chatId = ctx.chat.id;
+
+  if (!isImageEditConfigured()) {
+    await ctx.reply('Image editing is not configured. Ask the admin to set GOOGLE_AI_API_KEY.');
+    return;
+  }
+
+  try {
+    // Use the highest-resolution version
+    const photos = ctx.message.photo;
+    const photo = photos[photos.length - 1];
+    const caption = ctx.message.caption?.trim();
+
+    const fileUrl = await getFilePath(process.env.TELEGRAM_BOT_TOKEN!, photo.file_id);
+    const imageBuffer = await downloadVoiceNote(fileUrl); // reuse same HTTP downloader
+    const mimeType = 'image/jpeg';
+
+    if (caption) {
+      // Edit immediately using caption as the prompt
+      await ctx.reply('Editing image...');
+      const result = await editImage(imageBuffer, mimeType, caption);
+      if (result.description) await ctx.reply(result.description);
+      await ctx.replyWithPhoto({ source: result.imageBuffer });
+    } else {
+      // Ask for the edit prompt
+      setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
+      await ctx.reply('Got the image. What would you like me to do with it?\n\nDescribe the edit (e.g. "make the background white", "add a drop shadow", "adjust brightness +20%").');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[bot] photo handler error for chat', chatId, ':', msg);
+    await ctx.reply(`Couldn't edit that image — ${msg.slice(0, 80)}`);
   }
 });
 
@@ -1033,6 +1208,38 @@ async function handleReviewCommand(chatId: number, reply: (msg: string) => Promi
     await reply('Could not load your weekly review. Please try again.');
   }
 }
+
+// Wire up scheduler events — set session when Friday check-in is sent
+schedulerEvents.on('checkin_prompt_sent', (event: CheckinPromptEvent) => {
+  setSession(event.chatId, {
+    state: 'checkin_awaiting_input',
+    weekLabel: event.weekLabel,
+    periodStart: event.periodStart,
+    periodEnd: event.periodEnd,
+  });
+  console.log('[bot] check-in session set for chat', event.chatId, '| week:', event.weekLabel);
+});
+
+// /checkin command — trigger a manual check-in at any time
+bot.command('checkin', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const { format, subDays } = await import('date-fns');
+  const now = new Date();
+  const periodEnd = format(now, 'yyyy-MM-dd');
+  const periodStart = format(subDays(now, 6), 'yyyy-MM-dd');
+  const weekLabel = `${format(subDays(now, 6), 'MMM dd')} – ${format(now, 'MMM dd')}`;
+
+  setSession(chatId, {
+    state: 'checkin_awaiting_input',
+    weekLabel,
+    periodStart,
+    periodEnd,
+  });
+
+  await ctx.reply(
+    `🗓 Weekly Check-in — ${weekLabel}\n\nHow was your week? Reply with anything — I'll structure it.\n\n• Overall feeling?\n• Goals progress?\n• Biggest blocker?\n• Mood / energy?\n• Priorities for next week?\n\nSend "cancel" to exit.`
+  );
+});
 
 export async function setupWebhook(app: Express, webhookUrl: string) {
   const path = `/webhook/${process.env.TELEGRAM_BOT_TOKEN}`;

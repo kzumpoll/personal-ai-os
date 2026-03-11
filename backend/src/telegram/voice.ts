@@ -1,8 +1,29 @@
-import axios from 'axios';
-import FormData from 'form-data';
-import OpenAI from 'openai';
+/**
+ * Voice note handling — OpenAI Whisper (whisper-1) transcription.
+ *
+ * Required env var:
+ *   OPENAI_API_KEY  — standard OpenAI API key
+ *
+ * Flow:
+ *   1. Telegram sends a voice message with a file_id
+ *   2. getFilePath resolves the file_id to a download URL
+ *   3. downloadVoiceNote fetches the raw audio bytes
+ *   4. transcribeAudio sends to Whisper, returns plain text
+ *   5. bot.ts feeds the transcript into handleText() — same path as typed text
+ *
+ * This means every Telegram input type (text, voice) flows through identical
+ * intent interpretation and is stored the same way.
+ */
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+import OpenAI from 'openai';
+import { toFile } from 'openai';
+import axios from 'axios';
+
+function getOpenAI(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not set');
+  return new OpenAI({ apiKey });
+}
 
 export async function downloadVoiceNote(fileUrl: string): Promise<Buffer> {
   const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
@@ -10,22 +31,17 @@ export async function downloadVoiceNote(fileUrl: string): Promise<Buffer> {
 }
 
 export async function transcribeAudio(audioBuffer: Buffer, filename = 'voice.oga'): Promise<string> {
-  const formData = new FormData();
-  formData.append('file', audioBuffer, { filename, contentType: 'audio/ogg' });
-  formData.append('model', 'whisper-1');
+  const openai = getOpenAI();
 
-  const response = await axios.post(
-    'https://api.openai.com/v1/audio/transcriptions',
-    formData,
-    {
-      headers: {
-        ...formData.getHeaders(),
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-    }
-  );
+  // Wrap the buffer as a File-like object for the OpenAI SDK
+  const file = await toFile(audioBuffer, filename, { type: 'audio/ogg' });
 
-  return response.data.text as string;
+  const transcription = await openai.audio.transcriptions.create({
+    file,
+    model: 'whisper-1',
+  });
+
+  return transcription.text;
 }
 
 export async function getFilePath(botToken: string, fileId: string): Promise<string> {

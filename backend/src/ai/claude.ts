@@ -507,6 +507,135 @@ export async function confirmDebriefSummary(
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Debrief correction — apply a natural-language patch to an existing draft
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a small correction to an already-parsed debrief draft.
+ *
+ * The user is in the confirmation step and says something like:
+ *   "change the MIT to X"  /  "P1 should be Y"  /  "remove that win"
+ *
+ * This function asks Claude to merge the correction into the current data
+ * and return the updated JSON.
+ */
+export async function applyDebriefCorrection(
+  currentData: Record<string, unknown>,
+  correction: string
+): Promise<Intent | null> {
+  const prompt = `You are updating a daily debrief draft based on a user correction.
+
+Current debrief draft (JSON):
+${JSON.stringify(currentData, null, 2)}
+
+User correction: "${correction}"
+
+Apply the correction and return the COMPLETE updated debrief as a single JSON object with this exact shape:
+{
+  "intent": "save_debrief",
+  "data": {
+    ...all fields from current draft, with corrections applied...
+  }
+}
+
+Rules:
+- Keep all unchanged fields exactly as they are
+- Apply only what the user asked to change
+- "remove that win" / "delete win X" → remove it from the wins array
+- "change MIT to X" / "MIT should be X" → update the mit field
+- "P1 should be Y" → update the p1 field
+- "P2 is Z" → update the p2 field
+- Output RAW JSON only. No markdown. No prose. Start with { end with }.`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system: DEBRIEF_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const result = parseDebriefResponse(text);
+  return result?.intent ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Weekly check-in — parse a freeform Friday check-in reply
+// ---------------------------------------------------------------------------
+
+export interface CheckinData {
+  overall_feeling: string | null;
+  goals_progress: string | null;
+  biggest_blocker: string | null;
+  mood_reflection: string | null;
+  next_week_priorities: string | null;
+  suggested_tasks: string[];
+}
+
+const CHECKIN_SYSTEM_PROMPT = `You are parsing a weekly check-in reply. Output RAW JSON only. No markdown. No prose. Start with { end with }.`;
+
+export async function interpretCheckinReply(userReply: string): Promise<CheckinData> {
+  const prompt = `Parse this weekly check-in reply into structured JSON.
+
+Extract:
+- overall_feeling: how the person is feeling overall this week
+- goals_progress: what they said about their goal progress
+- biggest_blocker: their main obstacle or challenge
+- mood_reflection: mental health / mood / energy observations
+- next_week_priorities: what they want to focus on next week
+- suggested_tasks: array of 0–4 specific tasks suggested or implied (short titles only)
+
+Return this exact shape (null for fields not mentioned; empty array for suggested_tasks if none):
+{
+  "overall_feeling": "...",
+  "goals_progress": "...",
+  "biggest_blocker": "...",
+  "mood_reflection": "...",
+  "next_week_priorities": "...",
+  "suggested_tasks": ["...", "..."]
+}
+
+Reply: ${userReply}`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 512,
+    system: CHECKIN_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/m, '').trim();
+    return JSON.parse(cleaned) as CheckinData;
+  } catch {
+    return {
+      overall_feeling: userReply.slice(0, 200),
+      goals_progress: null,
+      biggest_blocker: null,
+      mood_reflection: null,
+      next_week_priorities: null,
+      suggested_tasks: [],
+    };
+  }
+}
+
+export function formatCheckinSummary(data: CheckinData, weekLabel: string): string {
+  const lines = [`Weekly Check-in — ${weekLabel}`, '─────────────────────'];
+  if (data.overall_feeling) lines.push(`Feeling: ${data.overall_feeling}`);
+  if (data.goals_progress) lines.push(`Goals: ${data.goals_progress}`);
+  if (data.biggest_blocker) lines.push(`Blocker: ${data.biggest_blocker}`);
+  if (data.mood_reflection) lines.push(`Mood: ${data.mood_reflection}`);
+  if (data.next_week_priorities) lines.push(`Next week: ${data.next_week_priorities}`);
+  if (data.suggested_tasks?.length) {
+    lines.push(`Suggested tasks:\n${data.suggested_tasks.map((t) => `• ${t}`).join('\n')}`);
+  }
+  lines.push('\nReply "yes" to save or correct anything first.');
+  return lines.join('\n');
+}
+
 // ─── Unified Intent Interpreter ───────────────────────────────────────────────
 
 const UNIFIED_SYSTEM_PROMPT = `You are a personal assistant in a Telegram bot. A user has sent you a message.

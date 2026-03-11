@@ -1,4 +1,5 @@
 import { Intent, CaptureType } from '../ai/intents';
+import { CheckinData } from '../ai/claude';
 
 // ---------------------------------------------------------------------------
 // Task list reference — tracks the last numbered list shown per chat so that
@@ -75,6 +76,8 @@ export type SessionState =
       debriefDate: string;
       planDate: string;
       pendingIntent: Intent;
+      // Kept so task names can be shown in correction summaries
+      tasks: Array<{ id: string; title: string; due_date: string | null }>;
     }
   | {
       // Awaiting yes/no from user before executing an ambiguous/significant intent
@@ -92,6 +95,27 @@ export type SessionState =
       state: 'pending_remove_event';
       planDate: string;
       candidates: Array<{ id: string; title: string; start: string }>;
+    }
+  | {
+      // User sent a photo without a caption — waiting for the edit prompt
+      state: 'image_awaiting_prompt';
+      imageBuffer: Buffer;
+      imageMimeType: string;
+    }
+  | {
+      // Friday check-in: waiting for freeform reply
+      state: 'checkin_awaiting_input';
+      weekLabel: string;
+      periodStart: string;
+      periodEnd: string;
+    }
+  | {
+      // Friday check-in: parsed, showing summary, waiting for yes/correction
+      state: 'checkin_awaiting_confirmation';
+      weekLabel: string;
+      periodStart: string;
+      periodEnd: string;
+      checkinData: CheckinData;
     };
 
 const sessions = new Map<number, SessionState>();

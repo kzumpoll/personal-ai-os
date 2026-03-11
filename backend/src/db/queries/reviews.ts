@@ -1,6 +1,6 @@
 import pool from '../client';
 
-export type ReviewType = 'weekly' | 'monthly' | 'quarterly';
+export type ReviewType = 'weekly' | 'monthly' | 'quarterly' | 'weekly_checkin';
 
 export interface Review {
   id: string;

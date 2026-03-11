@@ -6,8 +6,8 @@ interface Journal {
   id: string;
   entry_date: unknown;
   mit: string | null;
-  k1: string | null;
-  k2: string | null;
+  p1: string | null;
+  p2: string | null;
   open_journal: string | null;
 }
 
@@ -51,17 +51,22 @@ async function getData() {
   const today = format(now, 'yyyy-MM-dd');
 
   try {
-    const [winsRes, goalsRes, journalsRes, reviewsRes, highIdeasRes, overdueRes] = await Promise.all([
+    const [winsRes, goalsRes, journalsRes, reviewsRes, checkinsRes, highIdeasRes, overdueRes] = await Promise.all([
       pool.query<Win>(
         'SELECT * FROM wins WHERE entry_date >= $1 ORDER BY entry_date DESC',
         [weekStart]
       ),
       pool.query<Goal>(`SELECT * FROM goals WHERE status = 'active' ORDER BY created_at DESC`),
       pool.query<Journal>(
-        'SELECT id, entry_date, mit, k1, k2, open_journal FROM journals WHERE entry_date >= $1 ORDER BY entry_date DESC LIMIT 7',
+        'SELECT id, entry_date, mit, p1, p2, open_journal FROM journals WHERE entry_date >= $1 ORDER BY entry_date DESC LIMIT 7',
         [weekStart]
       ),
-      pool.query<Review>('SELECT * FROM reviews ORDER BY period_start DESC LIMIT 5'),
+      pool.query<Review>(
+        `SELECT * FROM reviews WHERE review_type != 'weekly_checkin' ORDER BY period_start DESC LIMIT 5`
+      ),
+      pool.query<Review>(
+        `SELECT * FROM reviews WHERE review_type = 'weekly_checkin' ORDER BY period_start DESC LIMIT 10`
+      ),
       pool.query<IdeaRow>(
         `SELECT id, content, actionability, next_step FROM ideas WHERE actionability = 'high' AND status = 'active' ORDER BY created_at DESC LIMIT 8`
       ),
@@ -76,6 +81,7 @@ async function getData() {
       goals: goalsRes.rows,
       journals: journalsRes.rows,
       reviews: reviewsRes.rows,
+      checkins: checkinsRes.rows,
       highIdeas: highIdeasRes.rows,
       overdue: overdueRes.rows,
       weekStart,
@@ -88,6 +94,7 @@ async function getData() {
       goals: [] as Goal[],
       journals: [] as Journal[],
       reviews: [] as Review[],
+      checkins: [] as Review[],
       highIdeas: [] as IdeaRow[],
       overdue: [] as TaskRow[],
       weekStart,
@@ -113,11 +120,82 @@ function SectionLabel({ children, color = 'var(--text-faint)' }: { children: Rea
   );
 }
 
+function CheckinCard({ review }: { review: Review }) {
+  const c = review.content;
+  const weekLabel = typeof c.week_label === 'string' ? c.week_label : `${fmtDate(review.period_start)} – ${fmtDate(review.period_end)}`;
+  const capturedAt = typeof c.captured_at === 'string' ? c.captured_at.slice(0, 10) : null;
+
+  const rows: { label: string; value: string | null; color: string }[] = [
+    { label: 'Feeling', value: typeof c.overall_feeling === 'string' ? c.overall_feeling : null, color: 'var(--green)' },
+    { label: 'Goals', value: typeof c.goals_progress === 'string' ? c.goals_progress : null, color: 'var(--cyan)' },
+    { label: 'Blocker', value: typeof c.biggest_blocker === 'string' ? c.biggest_blocker : null, color: 'var(--red)' },
+    { label: 'Mood', value: typeof c.mood_reflection === 'string' ? c.mood_reflection : null, color: 'var(--amber)' },
+    { label: 'Next week', value: typeof c.next_week_priorities === 'string' ? c.next_week_priorities : null, color: 'var(--violet)' },
+  ];
+
+  const suggestedTasks = Array.isArray(c.suggested_tasks) ? (c.suggested_tasks as string[]) : [];
+
+  return (
+    <div
+      className="rounded-lg p-4"
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <span
+          className="text-xs font-medium px-2 py-0.5 rounded-full"
+          style={{ color: 'var(--violet)', background: 'rgba(139,92,246,0.12)' }}
+        >
+          weekly check-in
+        </span>
+        <span
+          className="text-xs"
+          style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}
+        >
+          {weekLabel}{capturedAt ? ` · saved ${fmtDate(capturedAt)}` : ''}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        {rows.filter((r) => r.value).map((r) => (
+          <div key={r.label} className="flex items-start gap-2">
+            <span
+              className="text-xs shrink-0 pt-0.5"
+              style={{ color: r.color, fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.1em', textTransform: 'uppercase', minWidth: 60 }}
+            >
+              {r.label}
+            </span>
+            <p className="text-sm leading-snug" style={{ color: 'var(--text)' }}>{r.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {suggestedTasks.length > 0 && (
+        <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+          <p
+            className="text-xs mb-1.5"
+            style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.1em', textTransform: 'uppercase' }}
+          >
+            Suggested tasks
+          </p>
+          <div className="flex flex-col gap-1">
+            {suggestedTasks.map((t, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="w-1 h-1 rounded-full shrink-0" style={{ background: 'var(--text-faint)' }} />
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{t}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const revalidate = 30;
 
 export default async function ReviewPage() {
-  const { wins, goals, journals, reviews, highIdeas, overdue, weekStart, today } = await getData();
-  const hasData = goals.length > 0 || wins.length > 0 || journals.length > 0;
+  const { wins, goals, journals, reviews, checkins, highIdeas, overdue, weekStart, today } = await getData();
+  const hasData = goals.length > 0 || wins.length > 0 || journals.length > 0 || checkins.length > 0;
 
   return (
     <div className="max-w-3xl">
@@ -127,6 +205,18 @@ export default async function ReviewPage() {
       />
 
       <div className="flex flex-col gap-8">
+        {/* Weekly check-ins */}
+        {checkins.length > 0 && (
+          <section>
+            <SectionLabel color="var(--violet)">Weekly Check-ins &nbsp;{checkins.length}</SectionLabel>
+            <div className="flex flex-col gap-3">
+              {checkins.map((r) => (
+                <CheckinCard key={r.id} review={r} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Active Goals */}
         {goals.length > 0 && (
           <section>
@@ -219,7 +309,7 @@ export default async function ReviewPage() {
                         {j.mit}
                       </p>
                     )}
-                    {j.k1 && (
+                    {j.p1 && (
                       <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                         <span
                           style={{
@@ -229,12 +319,12 @@ export default async function ReviewPage() {
                             color: 'var(--blue)',
                           }}
                         >
-                          K1
+                          P1
                         </span>{' '}
-                        {j.k1}
+                        {j.p1}
                       </p>
                     )}
-                    {j.k2 && (
+                    {j.p2 && (
                       <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
                         <span
                           style={{
@@ -244,9 +334,9 @@ export default async function ReviewPage() {
                             color: 'var(--violet)',
                           }}
                         >
-                          K2
+                          P2
                         </span>{' '}
-                        {j.k2}
+                        {j.p2}
                       </p>
                     )}
                     {j.open_journal && (
@@ -320,10 +410,10 @@ export default async function ReviewPage() {
           </section>
         )}
 
-        {/* Saved reviews */}
+        {/* Saved reviews (non-checkin) */}
         {reviews.length > 0 && (
           <section>
-            <SectionLabel color="var(--violet)">Saved Reviews &nbsp;{reviews.length}</SectionLabel>
+            <SectionLabel color="var(--text-faint)">Saved Reviews &nbsp;{reviews.length}</SectionLabel>
             <div className="flex flex-col gap-2">
               {reviews.map((r) => (
                 <div

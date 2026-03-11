@@ -5,9 +5,12 @@ import { bot } from './telegram/bot';
 import { isCalendarConfigured, verifyCalendarConnection, getCalendarDiagnostics } from './services/calendar';
 import { getClaudeCodeStatus, setClaudeCodeStatus } from './db/queries/claude_status';
 import { syncTasksToNotion } from './services/notion';
+import { editImage, isImageEditConfigured } from './services/imageEdit';
+import { startScheduler } from './services/scheduler';
 
 const app = express();
-app.use(express.json());
+// Accept up to 20 MB JSON payloads (for base64-encoded image edits)
+app.use(express.json({ limit: '20mb' }));
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10);
 const startedAt = new Date().toISOString();
@@ -118,6 +121,50 @@ app.post('/notion-sync', async (req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// Image edit endpoint — POST /image-edit
+// Form fields: file (image), prompt (text instruction)
+// Protected by CLAUDE_STATUS_SECRET if set
+// ---------------------------------------------------------------------------
+
+app.post('/image-edit', async (req: Request, res: Response) => {
+  if (!isImageEditConfigured()) {
+    res.status(503).json({ error: 'GOOGLE_AI_API_KEY not set — image editing not configured.' });
+    return;
+  }
+
+  const secret = process.env.CLAUDE_STATUS_SECRET;
+  if (secret) {
+    const auth = req.headers['authorization'];
+    if (auth !== `Bearer ${secret}`) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  }
+
+  // Accepts JSON body: { image_base64: string, mime_type: string, prompt: string }
+  // Returns JSON: { image_base64: string, mime_type: string, description: string | null }
+  const body = req.body as { image_base64?: string; mime_type?: string; prompt?: string };
+  if (!body.image_base64) { res.status(400).json({ error: 'Missing image_base64' }); return; }
+  if (!body.prompt) { res.status(400).json({ error: 'Missing prompt' }); return; }
+
+  const mimeType = body.mime_type ?? 'image/jpeg';
+
+  try {
+    const imageBuffer = Buffer.from(body.image_base64, 'base64');
+    const result = await editImage(imageBuffer, mimeType, body.prompt);
+    res.json({
+      image_base64: result.imageBuffer.toString('base64'),
+      mime_type: result.mimeType,
+      description: result.description,
+    });
+  } catch (editErr) {
+    const msg = editErr instanceof Error ? editErr.message : String(editErr);
+    console.error('[image-edit] error:', msg);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Calendar diagnostics endpoint (internal, not secret)
 // ---------------------------------------------------------------------------
 
@@ -190,6 +237,10 @@ async function main() {
   // Telegram bot — always use polling (Railway provides a persistent process)
   await bot.launch();
   console.log('  bot:  polling started ✓');
+
+  // Recurring scheduler — Friday 8am check-in
+  startScheduler(bot);
+
   console.log('=== startup complete ===\n');
 
   process.once('SIGINT',  () => { console.log('Shutting down (SIGINT)…');  bot.stop('SIGINT');  });
