@@ -741,7 +741,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
   // --- Within Notion: awaiting confirmation (with correction support) ---
   if (session.state === 'within_review_awaiting_confirmation') {
-    const { proposal } = session;
+    const { proposal, stats } = session;
 
     if (isAffirmative(lower)) {
       clearSession(chatId);
@@ -760,8 +760,8 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     // Treat as correction
     console.log('[bot] within_review — applying correction:', text.slice(0, 80));
     const updatedProposal = await applyWithinCorrection(proposal, text);
-    setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal: updatedProposal });
-    await reply(`Updated ✓\n\n${formatWithinProposal(updatedProposal, { total: 0, overdue: 0, due_today: 0, due_soon: 0 })}`);
+    setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal: updatedProposal, stats });
+    await reply(`Updated ✓\n\n${formatWithinProposal(updatedProposal, stats)}`);
     return;
   }
 
@@ -1077,7 +1077,7 @@ async function startWithinReview(chatId: number, reply: (msg: string) => Promise
     due_soon: withinResult.due_soon.length,
   };
 
-  setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal });
+  setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal, stats });
   await reply(formatWithinProposal(proposal, stats));
 }
 

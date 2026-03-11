@@ -8,17 +8,24 @@
  * Database: https://www.notion.so/kz-automation/302aa8c43a1d80cf9a7af256a5ed3d36
  *
  * Allowed operations (non-destructive, read + limited write):
- *   ✓ Fetch all active tasks
+ *   ✓ Fetch tasks assigned to me
  *   ✓ Add a comment to a task
  *   ✓ Update a task's due date
  *   ✓ Create a new task
  *   ✗ Change status / mark complete / edit other properties
  *
- * Required env var:
- *   NOTION_TOKEN — integration token (same one used for personal task sync)
+ * Required env vars:
+ *   NOTION_TOKEN       — integration token (same one used for personal task sync)
+ *   NOTION_USER_ID     — your Notion person UUID for assignment filtering
+ *                        (find it via: GET https://api.notion.com/v1/users with your token)
  *
- * Configuration:
- *   NOTION_WITHIN_DB_ID (optional) — override the hardcoded database ID
+ * Optional env vars:
+ *   NOTION_WITHIN_DB_ID — override the hardcoded database ID
+ *
+ * IMPORTANT — "Insert comments" capability:
+ *   The Notion integration must have "Insert comments" enabled in its capability
+ *   settings at notion.so/profile/integrations. Without this, comment writes will
+ *   fail with HTTP 403 even if the token is otherwise valid.
  */
 
 import axios from 'axios';
@@ -35,6 +42,7 @@ export interface WithinTask {
   due_date: string | null;  // YYYY-MM-DD or null
   status: string | null;
   url: string;
+  assignee_ids: string[];  // Notion person UUIDs assigned to this task
 }
 
 export interface WithinTaskFetchResult {
@@ -53,6 +61,20 @@ function getToken(): string {
 
 function getDbId(): string {
   return process.env.NOTION_WITHIN_DB_ID ?? DEFAULT_WITHIN_DB_ID;
+}
+
+/**
+ * Returns the Notion person UUID for assignment filtering.
+ * Set NOTION_USER_ID in env. If not set, a warning is logged and
+ * all tasks are returned (no assignment filter applied).
+ *
+ * How to find your Notion user ID:
+ *   curl -s https://api.notion.com/v1/users \
+ *     -H "Authorization: Bearer $NOTION_TOKEN" \
+ *     -H "Notion-Version: 2022-06-28" | jq '.results[] | {id, name, email: .person.email}'
+ */
+function getNotionUserId(): string | null {
+  return process.env.NOTION_USER_ID ?? null;
 }
 
 function notionHeaders() {
@@ -112,6 +134,33 @@ function extractStatus(properties: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * Extract assignee person IDs from Notion page properties.
+ * Checks common property names for people-type fields.
+ *
+ * Notion people property shape:
+ *   { "type": "people", "people": [{ "id": "user-uuid", ... }] }
+ *
+ * Returns an array of person UUIDs (may be empty if none assigned).
+ */
+function extractAssignees(properties: Record<string, unknown>): string[] {
+  const candidates = ['Assignee', 'Assigned to', 'Assigned To', 'Person', 'Owner', 'Responsible', 'Member'];
+  for (const name of candidates) {
+    const prop = properties[name] as Record<string, unknown> | undefined;
+    if (prop?.type === 'people' && Array.isArray(prop.people)) {
+      return (prop.people as Array<{ id?: string }>).map((p) => p.id ?? '').filter(Boolean);
+    }
+  }
+  // Fall back to first people property found
+  for (const prop of Object.values(properties)) {
+    const p = prop as Record<string, unknown>;
+    if (p.type === 'people' && Array.isArray(p.people)) {
+      return (p.people as Array<{ id?: string }>).map((person) => person.id ?? '').filter(Boolean);
+    }
+  }
+  return [];
+}
+
 const DONE_STATUSES = new Set(['done', 'complete', 'completed', 'archived', 'cancelled', 'canceled']);
 
 function isDone(status: string | null): boolean {
@@ -130,16 +179,28 @@ function pageToTask(page: Record<string, unknown>): WithinTask {
     due_date: extractDueDate(properties),
     status: extractStatus(properties),
     url,
+    assignee_ids: extractAssignees(properties),
   };
 }
 
 /**
- * Fetch all active (non-done) tasks from the Within Notion database.
+ * Fetch active tasks from the Within Notion database assigned to the current user.
+ *
+ * Assignment filter:
+ *   - If NOTION_USER_ID is set: only returns tasks where assignee_ids includes that ID.
+ *     Tasks with no assignees are excluded (treated as unassigned to anyone).
+ *   - If NOTION_USER_ID is not set: returns all non-done tasks with a warning.
+ *
  * Returns tasks categorized by urgency.
  */
 export async function fetchWithinTasks(): Promise<WithinTaskFetchResult> {
   const dbId = getDbId();
   const today = getLocalToday();
+  const userId = getNotionUserId();
+
+  if (!userId) {
+    console.warn('[withinNotion] NOTION_USER_ID not set — including all tasks (no assignment filter). Set NOTION_USER_ID to filter to your tasks only.');
+  }
 
   const allTasks: WithinTask[] = [];
   let cursor: string | undefined;
@@ -162,6 +223,7 @@ export async function fetchWithinTasks(): Promise<WithinTaskFetchResult> {
       data = res.data as typeof data;
     } catch (err) {
       // If sorting by Due fails (property might have different name), try without sort
+      console.warn('[withinNotion] Sort by Due failed, retrying without sort:', axios.isAxiosError(err) ? err.response?.data : err);
       const res = await axios.post(
         `${NOTION_API}/databases/${dbId}/query`,
         { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) },
@@ -172,13 +234,20 @@ export async function fetchWithinTasks(): Promise<WithinTaskFetchResult> {
 
     for (const page of data.results) {
       const task = pageToTask(page as Record<string, unknown>);
-      if (!isDone(task.status)) {
-        allTasks.push(task);
+      if (isDone(task.status)) continue;
+
+      // Assignment filter: only include tasks assigned to this user
+      if (userId) {
+        if (!task.assignee_ids.includes(userId)) continue;
       }
+
+      allTasks.push(task);
     }
 
     cursor = data.has_more && data.next_cursor ? data.next_cursor : undefined;
   } while (cursor);
+
+  console.log(`[withinNotion] Fetched ${allTasks.length} active tasks${userId ? ` assigned to user ${userId.slice(0, 8)}…` : ' (all users)'}`);
 
   // Categorize by due date
   const todayMs = new Date(today).getTime();
@@ -211,17 +280,50 @@ export async function fetchWithinTasks(): Promise<WithinTaskFetchResult> {
 
 /**
  * Add a comment to a Notion page.
- * Requires the integration to have "Insert comments" permission.
+ *
+ * PREREQUISITE: The Notion integration must have "Insert comments" capability
+ * enabled at notion.so/profile/integrations — this is separate from content
+ * permissions and must be explicitly checked.
+ *
+ * Notion API: POST /v1/comments
+ * Body: { "parent": { "page_id": "..." }, "rich_text": [{ "type": "text", "text": { "content": "..." } }] }
  */
 export async function addCommentToTask(pageId: string, comment: string): Promise<void> {
-  await axios.post(
-    `${NOTION_API}/comments`,
-    {
-      parent: { page_id: pageId },
-      rich_text: [{ type: 'text', text: { content: comment } }],
-    },
-    { headers: notionHeaders() }
-  );
+  if (!comment || !comment.trim()) {
+    throw new Error(`addCommentToTask: comment text is empty for page ${pageId}`);
+  }
+
+  try {
+    await axios.post(
+      `${NOTION_API}/comments`,
+      {
+        parent: { page_id: pageId },
+        rich_text: [{ type: 'text', text: { content: comment } }],
+      },
+      { headers: notionHeaders() }
+    );
+    console.log(`[withinNotion] Comment added to page ${pageId.slice(0, 8)}…`);
+  } catch (err) {
+    if (axios.isAxiosError(err) && err.response) {
+      const status = err.response.status;
+      const body = JSON.stringify(err.response.data);
+      console.error(`[withinNotion] Comment write FAILED | page: ${pageId} | HTTP ${status} | response: ${body}`);
+
+      if (status === 403) {
+        throw new Error(
+          `Notion 403 on comment write — the integration is missing "Insert comments" capability. ` +
+          `Enable it at notion.so/profile/integrations for this integration.`
+        );
+      }
+      if (status === 400) {
+        throw new Error(`Notion 400 on comment write — bad request: ${body.slice(0, 120)}`);
+      }
+      if (status === 404) {
+        throw new Error(`Notion 404 on comment write — page ${pageId} not found or integration lacks access to it`);
+      }
+    }
+    throw err;
+  }
 }
 
 /**
@@ -254,6 +356,7 @@ export async function updateTaskDueDate(pageId: string, dueDate: string): Promis
     },
     { headers: notionHeaders() }
   );
+  console.log(`[withinNotion] Due date updated: page ${pageId.slice(0, 8)}… → ${dueDate}`);
 }
 
 /**
@@ -287,7 +390,9 @@ export async function createWithinTask(
     { headers: notionHeaders() }
   );
 
-  return pageToTask(res.data as Record<string, unknown>);
+  const created = pageToTask(res.data as Record<string, unknown>);
+  console.log(`[withinNotion] Created task: "${created.title}" (${created.id.slice(0, 8)}…)`);
+  return created;
 }
 
 export function isWithinConfigured(): boolean {

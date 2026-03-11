@@ -1025,9 +1025,19 @@ ${fmtTasks(withinTasks.no_date.slice(0, 10))}
 === YOUR TASK ===
 Generate a proposal with three types of changes. Be selective — only propose changes that are clearly useful.
 
-1. DATE CHANGES: Suggest new dates for overdue tasks. Pick realistic dates. Spread them out logically.
-2. COMMENTS: Draft update comments for tasks that relate to current focus/wins. Write as if the user is updating their collaborator Fay. Natural, concise, 1–2 sentences.
-3. NEW TASKS: Suggest creating Within tasks only if a Personal OS task clearly belongs in the shared project. Don't duplicate existing Within tasks.
+1. DATE CHANGES: Suggest new dates for overdue tasks. Pick realistic dates relative to today. Spread them out — don't pile everything on the same day.
+
+2. COMMENTS: Draft update comments ONLY for tasks where there is something specific and concrete to say based on the wins or journal above. If nothing concrete is available, skip the comment (don't add a comment at all).
+   Comment style (follow strictly — Fay is a collaborator, not a corporate stakeholder):
+   - Write like a natural message, not a status report
+   - Short sentences. First person. Casual but clear.
+   - No em-dashes or patterns like "did X — will do Y"
+   - No business jargon: no "momentum", "scope", "close-out", "leverage", "initial", "synergy", "contextual update"
+   - Be specific about what actually happened or what comes next
+   Good: "I went through all the teas we have in stock today. Chai and Rooibos are doing well. I'll put together a proper list with numbers this week."
+   Bad: "Making progress on this — maintaining momentum on the initial scope and will have an update to share soon."
+
+3. NEW TASKS: Suggest creating Within tasks only if a Personal OS task clearly belongs in the shared project and isn't already covered. Don't duplicate existing Within tasks.
 
 Return this exact JSON shape (use empty arrays if no proposals):
 {
@@ -1066,27 +1076,59 @@ Return this exact JSON shape (use empty arrays if no proposals):
 }
 
 /**
+ * Build a flat numbered list from a proposal.
+ * Numbers are stable across corrections because they always follow the same order:
+ * date_changes first, then comments, then new_tasks.
+ */
+function buildNumberedList(proposal: WithinProposal): Array<{ n: number; type: 'date_change' | 'comment' | 'new_task'; label: string }> {
+  const list: Array<{ n: number; type: 'date_change' | 'comment' | 'new_task'; label: string }> = [];
+  let n = 1;
+  for (const item of proposal.date_changes) {
+    list.push({ n: n++, type: 'date_change', label: `"${item.task_title}" → ${item.new_due_date ?? '?'}` });
+  }
+  for (const item of proposal.comments) {
+    list.push({ n: n++, type: 'comment', label: `"${item.task_title}" (comment)` });
+  }
+  for (const item of proposal.new_tasks) {
+    list.push({ n: n++, type: 'new_task', label: `new task: "${item.title}"` });
+  }
+  return list;
+}
+
+/**
  * Apply a natural-language correction to a Within proposal.
  * The user is in the confirmation step and says something like
- * "don't add comments" or "change the date for X to Mar 20".
+ * "1 move to Friday" or "skip comments" or "3 remove".
  */
 export async function applyWithinCorrection(
   currentProposal: WithinProposal,
   correction: string
 ): Promise<WithinProposal> {
-  const prompt = `Current Within Notion update proposal (JSON):
+  const numbered = buildNumberedList(currentProposal);
+  const numberedStr = numbered.map((i) => `${i.n}. [${i.type}] ${i.label}`).join('\n');
+  const today = new Date().toISOString().slice(0, 10);
+
+  const prompt = `Current Within Notion update proposal:
+
+Numbered items (the user will reference these by number):
+${numberedStr || '(empty)'}
+
+Full proposal JSON (update this and return):
 ${JSON.stringify(currentProposal, null, 2)}
 
 User correction: "${correction}"
 
-Apply the correction and return the COMPLETE updated proposal as JSON. Rules:
-- "remove the comment for X" / "skip comments" → remove from comments array
-- "don't create new tasks" / "skip new tasks" → empty new_tasks array
-- "change date for X to Y" → update that entry in date_changes
-- "remove date change for X" → remove from date_changes
-- Keep all unchanged fields exactly as they are
-- Output RAW JSON only. No markdown. No prose. Start with { end with }.
-- Return same shape: { "date_changes": [...], "comments": [...], "new_tasks": [...] }`;
+Apply the correction and return the COMPLETE updated proposal as JSON.
+How to interpret corrections:
+- "1 remove" / "remove 1" / "skip 1" → remove item #1 from its array
+- "1 move to Friday" / "1 → next week" → update new_due_date for that date_change item (resolve date from today: ${today})
+- "3 skip comment" / "3 no comment" / "remove comment 3" → remove item #3 from comments
+- "skip comments" / "no comments" → set comments to []
+- "skip new tasks" / "no new tasks" → set new_tasks to []
+- "change date for X to Y" → find the date_change with that task name, update new_due_date
+- Keep all unchanged items exactly as they are
+Output RAW JSON only. No markdown. No prose. Start with { end with }.
+Return same shape: { "date_changes": [...], "comments": [...], "new_tasks": [...] }`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -1111,7 +1153,7 @@ Apply the correction and return the COMPLETE updated proposal as JSON. Rules:
   }
 }
 
-/** Format a WithinProposal for display in Telegram. */
+/** Format a WithinProposal for display in Telegram with stable item numbering. */
 export function formatWithinProposal(
   proposal: WithinProposal,
   stats: { total: number; overdue: number; due_today: number; due_soon: number }
@@ -1119,7 +1161,7 @@ export function formatWithinProposal(
   const lines = [
     'Within Notion Update',
     '─────────────────────',
-    `Active tasks: ${stats.total}  |  Overdue: ${stats.overdue}  |  Today: ${stats.due_today}  |  Soon: ${stats.due_soon}`,
+    `Your tasks: ${stats.total}  |  Overdue: ${stats.overdue}  |  Today: ${stats.due_today}  |  Soon: ${stats.due_soon}`,
     '',
   ];
 
@@ -1134,30 +1176,32 @@ export function formatWithinProposal(
     return lines.join('\n');
   }
 
+  let n = 1;
+
   if (proposal.date_changes.length) {
-    lines.push(`📅 Date updates (${proposal.date_changes.length}):`);
+    lines.push('📅 Date updates:');
     for (const c of proposal.date_changes) {
-      lines.push(`• "${c.task_title}" → ${c.new_due_date}${c.reason ? ` (${c.reason})` : ''}`);
+      lines.push(`${n++}. "${c.task_title}" → ${c.new_due_date}${c.reason ? ` (${c.reason})` : ''}`);
     }
     lines.push('');
   }
 
   if (proposal.comments.length) {
-    lines.push(`💬 Comments to add (${proposal.comments.length}):`);
+    lines.push('💬 Comments to add:');
     for (const c of proposal.comments) {
-      lines.push(`• "${c.task_title}"\n  → "${c.comment}"`);
+      lines.push(`${n++}. "${c.task_title}"\n   → "${c.comment}"`);
     }
     lines.push('');
   }
 
   if (proposal.new_tasks.length) {
-    lines.push(`➕ New tasks (${proposal.new_tasks.length}):`);
+    lines.push('➕ New tasks:');
     for (const t of proposal.new_tasks) {
-      lines.push(`• "${t.title}"${t.due_date ? ` (due: ${t.due_date})` : ''}${t.reason ? ` — ${t.reason}` : ''}`);
+      lines.push(`${n++}. "${t.title}"${t.due_date ? ` (due: ${t.due_date})` : ''}${t.reason ? ` — ${t.reason}` : ''}`);
     }
     lines.push('');
   }
 
-  lines.push('Reply "yes" to execute, "no" to cancel, or tell me what to change.');
+  lines.push('Reply "yes" to execute, "no" to cancel, or correct by number (e.g. "1 move to Friday", "3 skip", "2 remove").');
   return lines.join('\n');
 }

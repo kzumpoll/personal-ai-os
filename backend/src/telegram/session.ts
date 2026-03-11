@@ -121,6 +121,7 @@ export type SessionState =
       // Within Notion update: proposal shown, waiting for yes/correction/no
       state: 'within_review_awaiting_confirmation';
       proposal: WithinProposal;
+      stats: { total: number; overdue: number; due_today: number; due_soon: number };
     };
 
 const sessions = new Map<number, SessionState>();
