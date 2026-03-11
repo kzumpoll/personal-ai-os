@@ -1,5 +1,5 @@
 /**
- * Google Calendar service — read-only, main calendar only.
+ * Google Calendar service — read + write, main calendar only.
  *
  * Auth priority (first found wins):
  *   1. GOOGLE_CREDENTIALS_JSON + GOOGLE_TOKEN_JSON  — env vars holding the raw JSON strings.
@@ -262,4 +262,182 @@ export async function getCalendarDiagnostics(): Promise<CalendarDiagnostics> {
 export async function verifyCalendarConnection(): Promise<boolean> {
   const diag = await getCalendarDiagnostics();
   return diag.configured && !diag.fetch_error;
+}
+
+// ---------------------------------------------------------------------------
+// Write operations — require calendar (read/write) scope
+// ---------------------------------------------------------------------------
+
+export interface CreateEventParams {
+  title: string;
+  startDateTime: string;  // ISO 8601 or YYYY-MM-DD for all-day
+  endDateTime: string;     // ISO 8601 or YYYY-MM-DD for all-day
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+}
+
+export interface UpdateEventParams {
+  eventId: string;
+  title?: string;
+  startDateTime?: string;
+  endDateTime?: string;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+}
+
+/**
+ * Create a new event on the primary calendar.
+ * Returns the created CalendarEvent, or null if auth is not configured or the call fails.
+ */
+export async function createCalendarEvent(params: CreateEventParams): Promise<CalendarEvent | null> {
+  const auth = buildAuth();
+  if (!auth) return null;
+
+  const tz = process.env.USER_TZ ?? 'UTC';
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth });
+
+    const start = params.allDay
+      ? { date: params.startDateTime.slice(0, 10) }
+      : { dateTime: params.startDateTime, timeZone: tz };
+    const end = params.allDay
+      ? { date: params.endDateTime.slice(0, 10) }
+      : { dateTime: params.endDateTime, timeZone: tz };
+
+    const res = await calendar.events.insert({
+      calendarId: 'primary',
+      requestBody: {
+        summary: params.title,
+        start,
+        end,
+        description: params.description,
+        location: params.location,
+      },
+    });
+
+    const event = res.data;
+    console.log(`[calendar] created event: "${event.summary}" (${event.id})`);
+    return parseEvent(event);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar] createCalendarEvent failed: ${msg}`);
+    return null;
+  }
+}
+
+/**
+ * Update an existing event on the primary calendar.
+ * Only the fields provided in params are updated; others are left unchanged.
+ */
+export async function updateCalendarEvent(params: UpdateEventParams): Promise<CalendarEvent | null> {
+  const auth = buildAuth();
+  if (!auth) return null;
+
+  const tz = process.env.USER_TZ ?? 'UTC';
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth });
+
+    // Fetch existing event first to preserve unmodified fields
+    const existing = await calendar.events.get({
+      calendarId: 'primary',
+      eventId: params.eventId,
+    });
+
+    const body: Record<string, unknown> = {};
+    if (params.title !== undefined) body.summary = params.title;
+    if (params.description !== undefined) body.description = params.description;
+    if (params.location !== undefined) body.location = params.location;
+
+    const isAllDay = params.allDay ?? Boolean(existing.data.start?.date);
+
+    if (params.startDateTime !== undefined) {
+      body.start = isAllDay
+        ? { date: params.startDateTime.slice(0, 10) }
+        : { dateTime: params.startDateTime, timeZone: tz };
+    }
+    if (params.endDateTime !== undefined) {
+      body.end = isAllDay
+        ? { date: params.endDateTime.slice(0, 10) }
+        : { dateTime: params.endDateTime, timeZone: tz };
+    }
+
+    const res = await calendar.events.patch({
+      calendarId: 'primary',
+      eventId: params.eventId,
+      requestBody: body,
+    });
+
+    console.log(`[calendar] updated event: "${res.data.summary}" (${params.eventId})`);
+    return parseEvent(res.data);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar] updateCalendarEvent(${params.eventId}) failed: ${msg}`);
+    return null;
+  }
+}
+
+/**
+ * Delete an event from the primary calendar.
+ * Returns true on success, false on failure.
+ */
+export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
+  const auth = buildAuth();
+  if (!auth) return false;
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth });
+    await calendar.events.delete({
+      calendarId: 'primary',
+      eventId,
+    });
+    console.log(`[calendar] deleted event: ${eventId}`);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar] deleteCalendarEvent(${eventId}) failed: ${msg}`);
+    return false;
+  }
+}
+
+/**
+ * Search for events matching a query string within a date range.
+ * Useful for finding events to update or delete when the user says
+ * "move padel tomorrow to 12" — we need to find the event first.
+ */
+export async function searchEvents(
+  query: string,
+  dateStart: string,
+  dateEnd: string
+): Promise<CalendarEvent[]> {
+  const result = buildAuthWithReason();
+  if (!result.auth) return [];
+
+  const tz = process.env.USER_TZ ?? 'UTC';
+
+  try {
+    const calendar = google.calendar({ version: 'v3', auth: result.auth });
+    const dayStart = localTimeToUtc(dateStart, '00:00:00', tz);
+    const dayEnd = localTimeToUtc(dateEnd, '23:59:59', tz);
+
+    const res = await calendar.events.list({
+      calendarId: 'primary',
+      q: query,
+      timeMin: dayStart.toISOString(),
+      timeMax: dayEnd.toISOString(),
+      timeZone: tz,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 10,
+    });
+
+    return (res.data.items ?? []).map(parseEvent);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[calendar] searchEvents("${query}") failed: ${msg}`);
+    return [];
+  }
 }

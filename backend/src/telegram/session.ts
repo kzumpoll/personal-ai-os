@@ -1,5 +1,6 @@
 import { Intent, CaptureType } from '../ai/intents';
 import { CheckinData, WithinProposal } from '../ai/claude';
+import { CalendarEvent } from '../services/calendar';
 
 // ---------------------------------------------------------------------------
 // Task list reference — tracks the last numbered list shown per chat so that
@@ -122,6 +123,13 @@ export type SessionState =
       state: 'within_review_awaiting_confirmation';
       proposal: WithinProposal;
       stats: { total: number; overdue: number; due_today: number; due_soon: number };
+    }
+  | {
+      // Calendar: multiple events matched an update/delete — waiting for user to pick one
+      state: 'pending_calendar_disambiguation';
+      action: 'update' | 'delete';
+      pendingIntent: Intent;
+      candidates: CalendarEvent[];
     };
 
 const sessions = new Map<number, SessionState>();

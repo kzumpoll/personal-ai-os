@@ -21,6 +21,7 @@ import {
   updateTaskDueDate,
   createWithinTask,
   isWithinConfigured,
+  discoverWithinUserIds,
 } from '../services/withinNotion';
 import { captureToIntent } from '../ai/intents';
 import { executeIntent, fmtDate } from '../mutations/executor';
@@ -193,6 +194,33 @@ function formatPlanReply(heading: string, diff: string | null, agenda?: string):
     parts.push(agenda);
   }
   return parts.join('\n');
+}
+
+/**
+ * After a calendar create/update/delete, check if the affected date is today or tomorrow.
+ * If so, regenerate the day plan to reflect the change.
+ */
+async function maybeRegeneratePlanAfterCalendarChange(
+  data: { affectsDate: string },
+  reply: (msg: string) => Promise<unknown>
+): Promise<void> {
+  const today = getLocalToday();
+  const tomorrow = getLocalTomorrow();
+  const affectedDate = data.affectsDate;
+
+  if (affectedDate !== today && affectedDate !== tomorrow) return;
+
+  const existing = await getDayPlanByDate(affectedDate);
+  if (!existing || !existing.wake_time) return; // No plan to regenerate
+
+  try {
+    const { agenda, diff } = await regeneratePlanFor(affectedDate);
+    if (diff) {
+      await reply(`Day plan updated:\n${diff}`);
+    }
+  } catch (err) {
+    console.error('[bot] day plan regeneration after calendar change failed:', err instanceof Error ? err.message : err);
+  }
 }
 
 async function applyDayPlanMutation(
@@ -537,6 +565,46 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
+  // --- Pending calendar disambiguation (update/delete with multiple matches) ---
+  if (session.state === 'pending_calendar_disambiguation') {
+    const { action, pendingIntent, candidates } = session;
+    if (isNegative(lower) || lower === 'cancel') {
+      clearSession(chatId);
+      await reply('Got it, no calendar change made.');
+      return;
+    }
+    const num = extractPositionalNumber(text);
+    if (num !== null && num >= 1 && num <= candidates.length) {
+      const chosen = candidates[num - 1];
+      clearSession(chatId);
+      console.log('[bot] calendar disambiguation: chose', chosen.id, chosen.title, 'for', action);
+
+      // Patch the pending intent with the resolved event_id
+      if (pendingIntent.intent === 'calendar_update_event') {
+        pendingIntent.data.event_id = chosen.id;
+        pendingIntent.data.search_date = chosen.start.slice(0, 10);
+      } else if (pendingIntent.intent === 'calendar_delete_event') {
+        pendingIntent.data.event_id = chosen.id;
+        pendingIntent.data.search_date = chosen.start.slice(0, 10);
+      }
+
+      const result = await executeIntent(pendingIntent);
+      await reply(result.message);
+
+      // Regenerate day plan if the calendar change affects today/tomorrow
+      if (result.success && result.data && typeof result.data === 'object' && 'affectsDate' in result.data) {
+        await maybeRegeneratePlanAfterCalendarChange(result.data as { affectsDate: string }, reply);
+      }
+    } else {
+      const lines = candidates.map((e, i) => {
+        const timeStr = e.start.length > 10 ? e.start.slice(11, 16) : 'all day';
+        return `${i + 1}. ${e.title} (${timeStr})`;
+      });
+      await reply(`Please reply with a number (1–${candidates.length}):\n${lines.join('\n')}`);
+    }
+    return;
+  }
+
   // --- Pending intent confirmation (ambiguous app_action) ---
   if (session.state === 'pending_confirmation') {
     if (isAffirmative(lower)) {
@@ -831,6 +899,14 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
     case 'answer': {
       console.log('[bot] [v2] dispatching: answer', intent.needs_tool ? `(tool: ${intent.needs_tool})` : '');
+      // Guardrail: block the LLM from claiming it can't access Google Calendar
+      const answerText = intent.text ?? '';
+      if (/can'?t.*(create|access|modify|add|schedule).*(calendar|event)/i.test(answerText) ||
+          /no.*(access|ability).*(calendar|event)/i.test(answerText)) {
+        console.warn('[bot] [CAL v2] BLOCKED answer claiming no calendar access:', answerText);
+        await reply('[CAL v2] I can create calendar events for you. Try: "add [event] [date] [time]"');
+        return;
+      }
       if (intent.needs_tool) {
         console.log('[bot] executing tool:', intent.needs_tool, JSON.stringify(intent.tool_params));
         const toolResult = await executeToolCall(intent.needs_tool, intent.tool_params ?? {});
@@ -851,8 +927,18 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       await reply(intent.question);
       return;
 
-    case 'capture':
+    case 'capture': {
       console.log('[bot] [v2] dispatching: capture/', intent.capture_type);
+      // Guardrail: if this looks like a calendar event, don't capture it as a resource
+      const captureText = intent.content?.toLowerCase() ?? '';
+      const looksLikeEvent =
+        /\b(\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|at\s+\d|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(captureText) &&
+        /\b(padel|lunch|dinner|meeting|call|session|appointment|event|brunch|coffee|drinks)\b/i.test(captureText);
+      if (intent.capture_type === 'resource' && looksLikeEvent) {
+        console.warn('[bot] [CAL v2] BLOCKED resource capture for calendar-like content:', captureText);
+        await reply('[CAL v2] This looks like a calendar event. Try: "add ' + (intent.content?.slice(0, 40) ?? 'event') + ' to my calendar"');
+        return;
+      }
       setSession(chatId, {
         state: 'pending_capture',
         captureType: intent.capture_type,
@@ -860,6 +946,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       });
       await reply(`${intent.confirm_question}\n\nReply "yes" to save or "no" to discard.`);
       return;
+    }
 
     case 'app_action': {
       const appIntent = intent.intent;
@@ -969,7 +1056,33 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
           console.log('[bot] stored idea list ref: count=', ideaIds.length);
         }
 
+        // Calendar disambiguation: executor returned multiple matches
+        if (
+          !result.success &&
+          result.data && typeof result.data === 'object' && 'disambiguation' in result.data &&
+          (appIntent.intent === 'calendar_update_event' || appIntent.intent === 'calendar_delete_event')
+        ) {
+          const candidates = (result.data as { disambiguation: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }> }).disambiguation;
+          setSession(chatId, {
+            state: 'pending_calendar_disambiguation',
+            action: appIntent.intent === 'calendar_update_event' ? 'update' : 'delete',
+            pendingIntent: appIntent,
+            candidates,
+          });
+          await reply(result.message + '\n\nReply with a number or "cancel".');
+          return;
+        }
+
         await reply(result.message);
+
+        // After calendar mutations, regenerate the day plan if affected date is today/tomorrow
+        if (
+          result.success &&
+          result.data && typeof result.data === 'object' && 'affectsDate' in result.data &&
+          (appIntent.intent === 'calendar_create_event' || appIntent.intent === 'calendar_update_event' || appIntent.intent === 'calendar_delete_event')
+        ) {
+          await maybeRegeneratePlanAfterCalendarChange(result.data as { affectsDate: string }, reply);
+        }
       }
       return;
     }
@@ -1022,6 +1135,33 @@ async function startDebrief(chatId: number, reply: (msg: string) => Promise<unkn
 async function startWithinReview(chatId: number, reply: (msg: string) => Promise<unknown>) {
   if (!isWithinConfigured()) {
     await reply('Within Notion is not configured — NOTION_TOKEN is missing. Ask the admin to set it.');
+    return;
+  }
+
+  // If NOTION_USER_ID is missing, discover person IDs from page property data
+  // so the user knows which UUID to set — no /v1/users needed.
+  if (!process.env.NOTION_USER_ID) {
+    await reply('NOTION_USER_ID is not set. Scanning Within tasks to find assignee IDs...');
+    try {
+      const people = await discoverWithinUserIds();
+      if (people.length === 0) {
+        await reply(
+          'No assigned people found in the first 20 Within tasks.\n\n' +
+          'Make sure some tasks are assigned to people in the database, then try again.\n\n' +
+          'Once you know your Notion user ID, set NOTION_USER_ID as a Railway env var and restart.'
+        );
+      } else {
+        const lines = people.map((p) => `• ${p.name}${p.email ? ` (${p.email})` : ''}\n  ID: ${p.id}`).join('\n\n');
+        await reply(
+          `Found these people assigned to tasks in Within:\n\n${lines}\n\n` +
+          `Set NOTION_USER_ID to your ID as a Railway env var, then trigger /within again.\n\n` +
+          `(The /v1/users endpoint requires a "Read user information" capability that most integrations don't have — these IDs come directly from task assignee data instead.)`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await reply(`Couldn't scan Within assignees — ${msg.slice(0, 120)}`);
+    }
     return;
   }
 

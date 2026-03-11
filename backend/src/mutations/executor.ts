@@ -16,7 +16,15 @@ import { createGoal, getActiveGoals, getAllGoals } from '../db/queries/goals';
 import { createResource, getAllResources } from '../db/queries/resources';
 import { upsertJournal } from '../db/queries/journals';
 import { upsertDayPlan, setDayPlanIntentions } from '../db/queries/day_plans';
-import { getEventsForDate } from '../services/calendar';
+import {
+  getEventsForDate,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  searchEvents,
+  isCalendarConfigured,
+  CalendarEvent,
+} from '../services/calendar';
 import { generateDayPlan, formatAgendaForBot } from '../services/dayplan';
 import pool from '../db/client';
 import { format } from 'date-fns';
@@ -41,6 +49,33 @@ export function fmtDate(d: Date | string | null | undefined): string {
   if (parts.length !== 3 || parts.some(isNaN)) return s;
   const [y, m, day] = parts;
   return format(new Date(y, m - 1, day), 'MMM dd');
+}
+
+/**
+ * Format an ISO datetime or HH:MM time string into a short local time like "11:00".
+ * Uses USER_TZ when available.
+ */
+function formatEventTime(iso: string): string {
+  try {
+    const tz = process.env.USER_TZ;
+    if (tz && iso.includes('T')) {
+      const d = new Date(iso);
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz,
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const h = parts.find((p) => p.type === 'hour')?.value ?? '00';
+      const m = parts.find((p) => p.type === 'minute')?.value ?? '00';
+      return `${h}:${m}`;
+    }
+    // Fallback: extract time from ISO string
+    if (iso.includes('T')) return iso.slice(11, 16);
+    return iso;
+  } catch {
+    return iso.slice(11, 16) || iso;
+  }
 }
 
 /**
@@ -514,6 +549,18 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'create_resource': {
+      // Safety check: if the content looks like a calendar event, don't silently save as resource
+      const combined = `${intent.data.title ?? ''} ${intent.data.content_or_url ?? ''}`.toLowerCase();
+      const hasSchedulingSignal =
+        /\b(\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|at\s+\d|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|afternoon|evening)\b/i.test(combined) &&
+        /\b(padel|lunch|dinner|meeting|call|session|appointment|event|brunch|coffee|drinks)\b/i.test(combined);
+      if (hasSchedulingSignal) {
+        return {
+          success: false,
+          message: `This looks like a calendar event, not a resource. Try: "add ${intent.data.title ?? 'event'} to my calendar"`,
+        };
+      }
+
       const resource = await createResource(intent.data);
       await logMutation({
         action: 'create',
@@ -779,6 +826,166 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         success: true,
         message: `Idea promoted to project: "${project.title}"\nYou can now add tasks to this project.`,
         data: project,
+      };
+    }
+
+    case 'calendar_create_event': {
+      console.log('[executor] [CAL v2] calendar_create_event hit, configured:', isCalendarConfigured());
+      if (!isCalendarConfigured()) {
+        console.error('[executor] [CAL v2] Calendar NOT configured — check GOOGLE_CREDENTIALS_JSON + GOOGLE_TOKEN_JSON');
+        return { success: false, message: '[CAL v2] Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
+      }
+      const { title, start_datetime, end_datetime, all_day, description, location } = intent.data;
+      console.log('[executor] [CAL v2] creating event:', JSON.stringify({ title, start_datetime, end_datetime, location }));
+      const event = await createCalendarEvent({
+        title,
+        startDateTime: start_datetime,
+        endDateTime: end_datetime,
+        allDay: all_day,
+        description,
+        location,
+      });
+      if (!event) {
+        return { success: false, message: 'Could not create the calendar event. Please try again.' };
+      }
+      await logMutation({
+        action: 'create',
+        table_name: 'calendar_events',
+        record_id: event.id,
+        before_data: null,
+        after_data: event as unknown as Record<string, unknown>,
+      });
+      const dateStr = fmtDate(start_datetime.slice(0, 10));
+      const timeStr = event.allDay
+        ? 'All day'
+        : `${formatEventTime(event.start)}–${formatEventTime(event.end)}`;
+      const lines = [`[CAL v2] Added to calendar:`, `${event.title}`, `${dateStr}, ${timeStr}`];
+      if (location) lines.push(location);
+      return {
+        success: true,
+        message: lines.join('\n'),
+        data: { calendarEvent: event, affectsDate: start_datetime.slice(0, 10) },
+      };
+    }
+
+    case 'calendar_update_event': {
+      if (!isCalendarConfigured()) {
+        return { success: false, message: 'Google Calendar is not configured.' };
+      }
+      const { event_id, event_title, search_date, new_title, new_start_datetime, new_end_datetime, new_description, new_location } = intent.data;
+
+      // Find the event to update
+      let targetEvent: CalendarEvent | null = null;
+      let matchedEvents: CalendarEvent[] = [];
+
+      if (event_id) {
+        // Direct ID match from context
+        const dateToSearch = search_date ?? new Date().toISOString().slice(0, 10);
+        const events = await getEventsForDate(dateToSearch);
+        targetEvent = events.find((e) => e.id === event_id) ?? null;
+      }
+
+      if (!targetEvent && event_title && search_date) {
+        matchedEvents = await searchEvents(event_title, search_date, search_date);
+        if (matchedEvents.length === 1) {
+          targetEvent = matchedEvents[0];
+        } else if (matchedEvents.length > 1) {
+          return {
+            success: false,
+            message: `I found ${matchedEvents.length} events matching "${event_title}":\n${matchedEvents.map((e, i) => `${i + 1}. ${e.title} (${formatEventTime(e.start)})`).join('\n')}\nWhich one did you mean?`,
+            data: { disambiguation: matchedEvents },
+          };
+        }
+      }
+
+      if (!targetEvent) {
+        return { success: false, message: `Could not find an event${event_title ? ` called "${event_title}"` : ''}. Try checking your calendar first.` };
+      }
+
+      const before = { ...targetEvent };
+      const updated = await updateCalendarEvent({
+        eventId: targetEvent.id,
+        title: new_title,
+        startDateTime: new_start_datetime,
+        endDateTime: new_end_datetime,
+        description: new_description,
+        location: new_location,
+      });
+
+      if (!updated) {
+        return { success: false, message: `Could not update "${targetEvent.title}". Please try again.` };
+      }
+
+      await logMutation({
+        action: 'update',
+        table_name: 'calendar_events',
+        record_id: targetEvent.id,
+        before_data: before as unknown as Record<string, unknown>,
+        after_data: updated as unknown as Record<string, unknown>,
+      });
+
+      const changeDesc = new_start_datetime
+        ? `to ${formatEventTime(new_start_datetime)}`
+        : new_title
+          ? `renamed to "${new_title}"`
+          : 'updated';
+      const affectsDate = (new_start_datetime ?? targetEvent.start).slice(0, 10);
+      return {
+        success: true,
+        message: `Moved ${targetEvent.title} ${changeDesc}`,
+        data: { calendarEvent: updated, affectsDate },
+      };
+    }
+
+    case 'calendar_delete_event': {
+      if (!isCalendarConfigured()) {
+        return { success: false, message: 'Google Calendar is not configured.' };
+      }
+      const { event_id, event_title, search_date } = intent.data;
+
+      let targetEvent: CalendarEvent | null = null;
+      let matchedEvents: CalendarEvent[] = [];
+
+      if (event_id) {
+        const dateToSearch = search_date ?? new Date().toISOString().slice(0, 10);
+        const events = await getEventsForDate(dateToSearch);
+        targetEvent = events.find((e) => e.id === event_id) ?? null;
+      }
+
+      if (!targetEvent && event_title && search_date) {
+        matchedEvents = await searchEvents(event_title, search_date, search_date);
+        if (matchedEvents.length === 1) {
+          targetEvent = matchedEvents[0];
+        } else if (matchedEvents.length > 1) {
+          return {
+            success: false,
+            message: `I found ${matchedEvents.length} events matching "${event_title}":\n${matchedEvents.map((e, i) => `${i + 1}. ${e.title} (${formatEventTime(e.start)})`).join('\n')}\nWhich one did you mean?`,
+            data: { disambiguation: matchedEvents },
+          };
+        }
+      }
+
+      if (!targetEvent) {
+        return { success: false, message: `Could not find an event${event_title ? ` called "${event_title}"` : ''} to delete.` };
+      }
+
+      const deleted = await deleteCalendarEvent(targetEvent.id);
+      if (!deleted) {
+        return { success: false, message: `Could not delete "${targetEvent.title}". Please try again.` };
+      }
+
+      await logMutation({
+        action: 'delete',
+        table_name: 'calendar_events',
+        record_id: targetEvent.id,
+        before_data: targetEvent as unknown as Record<string, unknown>,
+      });
+
+      const affectsDate = targetEvent.start.slice(0, 10);
+      return {
+        success: true,
+        message: `Removed: ${targetEvent.title}`,
+        data: { calendarEvent: targetEvent, affectsDate },
       };
     }
 

@@ -399,6 +399,52 @@ export function isWithinConfigured(): boolean {
   return Boolean(process.env.NOTION_TOKEN);
 }
 
+export interface WithinPersonEntry {
+  id: string;
+  name: string;
+  email?: string;
+}
+
+/**
+ * Discover Notion person IDs from the people-type properties on tasks in the
+ * Within database. Does NOT call /v1/users — instead reads person objects that
+ * Notion embeds directly in page property responses.
+ *
+ * Returns unique person entries found across the first page of results.
+ * Use this when NOTION_USER_ID is not set to help the user identify their ID.
+ */
+export async function discoverWithinUserIds(): Promise<WithinPersonEntry[]> {
+  const dbId = getDbId();
+
+  const res = await axios.post(
+    `${NOTION_API}/databases/${dbId}/query`,
+    { page_size: 20 },
+    { headers: notionHeaders() }
+  );
+
+  const data = res.data as { results: unknown[] };
+  const seen = new Map<string, WithinPersonEntry>();
+
+  for (const page of data.results) {
+    const properties = ((page as Record<string, unknown>).properties ?? {}) as Record<string, unknown>;
+    for (const prop of Object.values(properties)) {
+      const p = prop as Record<string, unknown>;
+      if (p.type === 'people' && Array.isArray(p.people)) {
+        for (const person of p.people as Array<Record<string, unknown>>) {
+          const id = person.id as string | undefined;
+          if (!id || seen.has(id)) continue;
+          const name = (person.name as string | undefined) ?? 'Unknown';
+          const personInfo = person.person as Record<string, unknown> | undefined;
+          const email = personInfo?.email as string | undefined;
+          seen.set(id, { id, name, ...(email ? { email } : {}) });
+        }
+      }
+    }
+  }
+
+  return Array.from(seen.values());
+}
+
 /** Format a WithinTask for display in Telegram. */
 export function formatWithinTask(t: WithinTask, today: string): string {
   const due = t.due_date

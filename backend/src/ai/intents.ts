@@ -19,6 +19,9 @@ export type IntentType =
   | 'add_win'
   | 'add_goal'
   | 'create_resource'
+  | 'calendar_create_event'
+  | 'calendar_update_event'
+  | 'calendar_delete_event'
   | 'daily_debrief'
   | 'save_debrief'
   | 'weekly_review'
@@ -221,6 +224,41 @@ export interface PromoteIdeaToProjectIntent {
   };
 }
 
+export interface CalendarCreateEventIntent {
+  intent: 'calendar_create_event';
+  data: {
+    title: string;
+    start_datetime: string;  // ISO 8601 (e.g. "2026-03-12T11:00:00")
+    end_datetime: string;    // ISO 8601
+    all_day?: boolean;
+    description?: string;
+    location?: string;
+  };
+}
+
+export interface CalendarUpdateEventIntent {
+  intent: 'calendar_update_event';
+  data: {
+    event_id?: string;       // exact Google Calendar event ID (from context)
+    event_title?: string;    // fuzzy match fallback
+    search_date?: string;    // YYYY-MM-DD to search for the event
+    new_title?: string;
+    new_start_datetime?: string;
+    new_end_datetime?: string;
+    new_description?: string;
+    new_location?: string;
+  };
+}
+
+export interface CalendarDeleteEventIntent {
+  intent: 'calendar_delete_event';
+  data: {
+    event_id?: string;
+    event_title?: string;
+    search_date?: string;    // YYYY-MM-DD to search for the event
+  };
+}
+
 export interface WithinReviewIntent {
   intent: 'within_review';
   data: Record<string, never>;
@@ -252,6 +290,9 @@ export type Intent =
   | AddWinIntent
   | AddGoalIntent
   | CreateResourceIntent
+  | CalendarCreateEventIntent
+  | CalendarUpdateEventIntent
+  | CalendarDeleteEventIntent
   | DailyDebriefIntent
   | SaveDebriefIntent
   | WeeklyReviewIntent

@@ -216,9 +216,12 @@ async function main() {
   console.log('  db:   connected ✓');
 
   // Google Calendar — detailed startup log
+  console.log('  [CAL v2] build marker — calendar write support active');
   const calDiag = await getCalendarDiagnostics();
   if (calDiag.configured) {
     console.log(`  cal:  configured ✓ (${calDiag.event_count ?? 0} events today)`);
+    console.log('  cal:  GOOGLE_TOKEN_JSON loaded:', !!process.env.GOOGLE_TOKEN_JSON);
+    console.log('  cal:  GOOGLE_CREDENTIALS_JSON loaded:', !!process.env.GOOGLE_CREDENTIALS_JSON);
   } else {
     console.log(`  cal:  not configured — ${calDiag.reason}`);
     if (calDiag.reason === 'json_parse_error') {

@@ -652,7 +652,8 @@ Choose the type that best describes what the user actually wants to accomplish:
                        change or inspect the current state of the plan.
 
   app_action         — The user is explicitly commanding the system to create, list, complete, or
-                       update structured data: tasks, ideas, thoughts, wins, goals, or resources.
+                       update structured data: tasks, ideas, thoughts, wins, goals, resources,
+                       or calendar events (create/update/delete events on Google Calendar).
 
   capture            — The user mentions something worth saving in a conversational way, without
                        explicitly commanding a save. They are sharing an observation, not giving
@@ -682,9 +683,15 @@ Seeking information or understanding → answer
 Brief social exchange → casual
 Genuinely ambiguous goal → clarify
 
-When a message contains structured-looking content (dates, times, titles), consider whether the user
-is operating on the schedule or saving that content as data. A message whose primary verb is saving
-or adding (e.g. save, add, log, note) is saving content regardless of what the content contains.
+IMPORTANT — Calendar vs Resource disambiguation:
+When a message describes a future event with scheduling details (a date/time, a person to meet,
+a place, a duration, or words like "event", "meeting", "dinner", "lunch", "call", "session",
+"padel", "appointment"), it is a CALENDAR ACTION (app_action → calendar_create_event), NOT a
+resource or capture. This applies even when the verb is "add", "schedule", "book", "block", or
+"create". Calendar actions always take priority over resource/capture for scheduling-like content.
+
+Only classify as capture/resource when the user is explicitly saving a reference (URL, article,
+link, note, recipe, quote) — not an event to be scheduled.
 
 When a message is about the schedule in an informational way — asking what it contains, how it works,
 what operations are available, or whether something is possible — the user's goal is understanding,
@@ -720,6 +727,12 @@ FOR capture:
   "content": "cleaned content to save (no labels, no metadata)",
   "confirm_question": "natural confirmation e.g. 'That sounds like an idea — want me to save it?'"
 }
+
+CRITICAL — System capabilities:
+This system has FULL Google Calendar read/write access. You can create, update, and delete
+calendar events. NEVER generate a response claiming you cannot access or modify Google Calendar.
+If the user asks to add, schedule, move, or cancel a calendar event, ALWAYS return app_action
+with the appropriate calendar intent — never return an answer saying it is not possible.
 
 FOR answer:
 {
@@ -804,6 +817,12 @@ Calendar events (type:event in schedule) → use remove_event, not remove_block.
 
 ━━━ App Intent types ━━━
 
+Calendar event intents (use these for any scheduling/event request):
+calendar_create_event: { "intent": "calendar_create_event", "data": { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "all_day": false, "description": "...", "location": "..." } }
+calendar_update_event: { "intent": "calendar_update_event", "data": { "event_id": "...", "event_title": "...", "search_date": "YYYY-MM-DD", "new_title": "...", "new_start_datetime": "YYYY-MM-DDTHH:MM:SS", "new_end_datetime": "YYYY-MM-DDTHH:MM:SS" } }
+calendar_delete_event: { "intent": "calendar_delete_event", "data": { "event_id": "...", "event_title": "...", "search_date": "YYYY-MM-DD" } }
+
+Other structured data intents:
 create_task:         { "intent": "create_task",         "data": { "title": "...", "due_date": "YYYY-MM-DD" } }
 create_tasks_bulk:   { "intent": "create_tasks_bulk",   "data": { "tasks": [{ "title": "...", "due_date": "YYYY-MM-DD" }] } }
 list_tasks:          { "intent": "list_tasks",          "data": { "filter": "overdue"|"today"|"tomorrow"|"upcoming"|"all" } }
@@ -829,6 +848,25 @@ weekly_review:       { "intent": "weekly_review",       "data": {} }
 within_review:       { "intent": "within_review",       "data": {} }
 undo_last:           { "intent": "undo_last",           "data": {} }
 unknown:             { "intent": "unknown",             "data": { "message": "..." } }
+
+Calendar intent rules:
+- "add padel tomorrow at 11" → calendar_create_event with title "Padel", start tomorrow at 11:00, end at 12:00 (default 1h), HIGH, confirm:false
+- "lunch with Fay Friday 1:30" → calendar_create_event with title "Lunch with Fay", start Friday 13:30, end 14:30, HIGH, confirm:false
+- "block 2 hours tomorrow morning for deep work" → calendar_create_event with title "Deep work", start tomorrow 09:00, end 11:00, HIGH, confirm:false
+- "dinner tonight at 7" → calendar_create_event with title "Dinner", start today 19:00, end 20:00, HIGH, confirm:false
+- "add tea session Sunday at 4pm in Ubud" → calendar_create_event with title "Tea session", start Sunday 16:00, end 17:00, location "Ubud", HIGH, confirm:false
+- "move padel tomorrow to 12" → calendar_update_event with event_title "Padel", search_date tomorrow, new_start 12:00, HIGH, confirm:false
+- "cancel lunch with Fay on Friday" → calendar_delete_event with event_title "Lunch with Fay", search_date Friday, MEDIUM, confirm_needed:true
+- "reschedule Website Review to Monday at 10" → calendar_update_event, MEDIUM, confirm:false
+- When no end time is specified, default event duration is 1 hour
+- When only "morning" is said without a time, use 09:00; "afternoon" → 14:00; "evening" → 19:00
+- "block N hours" → set duration to N hours from the start time
+- Use event_id from calendar events in context when available; otherwise use event_title + search_date for lookup
+- Resolve all relative dates (today, tomorrow, Friday, next Monday, etc.) using Today/Tomorrow from context
+- When critical details are missing (e.g. "add lunch Friday" with no time), set confidence to "low" and include follow_up_question asking for the missing detail
+- For deletes: always set confirm_needed:true unless the match is unambiguous (exact title + date)
+- For updates with multiple possible matches: set confidence to "medium" and confirm_needed:true
+- Calendar actions use keywords: add, schedule, create, block, book → create; move, change, reschedule, push → update; cancel, remove, delete → delete
 
 App intent rules:
 - "let's update the within notion", "sync within tasks", "update fay on what i've been doing", "review the within tasks", "let's update fay", "within update", "notion update" → within_review, HIGH, confirm:false
