@@ -1,5 +1,5 @@
 import { Intent, CaptureType } from '../ai/intents';
-import { CheckinData } from '../ai/claude';
+import { CheckinData, WithinProposal } from '../ai/claude';
 
 // ---------------------------------------------------------------------------
 // Task list reference — tracks the last numbered list shown per chat so that
@@ -116,6 +116,11 @@ export type SessionState =
       periodStart: string;
       periodEnd: string;
       checkinData: CheckinData;
+    }
+  | {
+      // Within Notion update: proposal shown, waiting for yes/correction/no
+      state: 'within_review_awaiting_confirmation';
+      proposal: WithinProposal;
     };
 
 const sessions = new Map<number, SessionState>();

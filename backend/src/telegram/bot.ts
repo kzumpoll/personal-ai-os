@@ -8,8 +8,20 @@ import {
   applyDebriefCorrection,
   interpretCheckinReply,
   formatCheckinSummary,
+  generateWithinProposal,
+  applyWithinCorrection,
+  formatWithinProposal,
+  WithinProposal,
+  WithinContext,
   DayPlanMutation,
 } from '../ai/claude';
+import {
+  fetchWithinTasks,
+  addCommentToTask,
+  updateTaskDueDate,
+  createWithinTask,
+  isWithinConfigured,
+} from '../services/withinNotion';
 import { captureToIntent } from '../ai/intents';
 import { executeIntent, fmtDate } from '../mutations/executor';
 import {
@@ -727,6 +739,32 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     return;
   }
 
+  // --- Within Notion: awaiting confirmation (with correction support) ---
+  if (session.state === 'within_review_awaiting_confirmation') {
+    const { proposal } = session;
+
+    if (isAffirmative(lower)) {
+      clearSession(chatId);
+      console.log('[bot] within_review confirmed → executing proposal');
+      await reply('Updating Within Notion...');
+      await executeWithinProposal(proposal, reply);
+      return;
+    }
+
+    if (isNegative(lower) || lower === 'cancel') {
+      clearSession(chatId);
+      await reply('Within update cancelled — nothing changed.');
+      return;
+    }
+
+    // Treat as correction
+    console.log('[bot] within_review — applying correction:', text.slice(0, 80));
+    const updatedProposal = await applyWithinCorrection(proposal, text);
+    setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal: updatedProposal });
+    await reply(`Updated ✓\n\n${formatWithinProposal(updatedProposal, { total: 0, overdue: 0, due_today: 0, due_soon: 0 })}`);
+    return;
+  }
+
   // --- Unified intent interpretation ---
   // One LLM call determines what the user wants to do semantically.
   // Dispatch is deterministic from the returned UserIntent type.
@@ -900,6 +938,8 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         await startDebrief(chatId, reply);
       } else if (appIntent.intent === 'weekly_review') {
         await handleReviewCommand(chatId, reply);
+      } else if (appIntent.intent === 'within_review') {
+        await startWithinReview(chatId, reply);
       } else {
         let result: Awaited<ReturnType<typeof executeIntent>>;
         try {
@@ -977,6 +1017,110 @@ async function startDebrief(chatId: number, reply: (msg: string) => Promise<unkn
   await reply(
     `Daily Debrief\nDebriefing: ${fmtDate(debriefDate)}\nPlanning: ${fmtDate(planDate)}\n\nOpen tasks:\n${taskSummary}\n${intentionSection}${winsSection}\nReply with your wake time, MIT, P1, P2, reflections, and wins.\nExample:\nWake: 07:00\nMIT: Finish proposal\nP1: Review PR\nP2: Email client\nJournal: Good focus day\nWins: Shipped feature, hit inbox zero\n\nInclude "Wake: HH:MM" to get a generated day plan.\nSend "cancel" to exit.`
   );
+}
+
+async function startWithinReview(chatId: number, reply: (msg: string) => Promise<unknown>) {
+  if (!isWithinConfigured()) {
+    await reply('Within Notion is not configured — NOTION_TOKEN is missing. Ask the admin to set it.');
+    return;
+  }
+
+  await reply('Fetching Within tasks...');
+
+  let withinResult: Awaited<ReturnType<typeof fetchWithinTasks>>;
+  try {
+    withinResult = await fetchWithinTasks();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[bot] Within: fetchWithinTasks failed:', msg);
+    await reply(`Couldn't fetch Within tasks — ${msg.slice(0, 80)}`);
+    return;
+  }
+
+  const today = getLocalToday();
+
+  // Build personal OS context
+  const [wins, journal, overdueTasks, todayTasks] = await Promise.all([
+    getWinsForDate(today).catch(() => [] as { content: string }[]),
+    getJournalByDate(today).catch(() => null),
+    getOverdueTasks(15).catch(() => [] as { title: string; due_date: string | null }[]),
+    getTasksForDate(today, 15).catch(() => [] as { title: string; due_date: string | null }[]),
+  ]);
+
+  const ctx: WithinContext = {
+    today,
+    wins: wins.map((w) => w.content),
+    journal_mit: journal?.mit ?? null,
+    journal_p1: journal?.p1 ?? null,
+    journal_p2: journal?.p2 ?? null,
+    journal_notes: journal?.open_journal ?? null,
+    personal_tasks: [
+      ...overdueTasks.map((t) => ({ title: t.title, due_date: t.due_date })),
+      ...todayTasks.map((t) => ({ title: t.title, due_date: t.due_date })),
+    ],
+  };
+
+  let proposal: WithinProposal;
+  try {
+    proposal = await generateWithinProposal(withinResult, ctx);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[bot] Within: generateWithinProposal failed:', msg);
+    await reply(`Couldn't generate proposal — ${msg.slice(0, 80)}`);
+    return;
+  }
+
+  const stats = {
+    total: withinResult.tasks.length,
+    overdue: withinResult.overdue.length,
+    due_today: withinResult.due_today.length,
+    due_soon: withinResult.due_soon.length,
+  };
+
+  setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal });
+  await reply(formatWithinProposal(proposal, stats));
+}
+
+async function executeWithinProposal(proposal: WithinProposal, reply: (msg: string) => Promise<unknown>) {
+  const results: string[] = [];
+  let errors = 0;
+
+  for (const change of proposal.date_changes) {
+    try {
+      await updateTaskDueDate(change.task_id, change.new_due_date!);
+      results.push(`✓ "${change.task_title}" → ${change.new_due_date}`);
+    } catch (err) {
+      errors++;
+      console.error('[bot] Within: date change failed for', change.task_id, err instanceof Error ? err.message : err);
+    }
+  }
+
+  for (const comment of proposal.comments) {
+    try {
+      await addCommentToTask(comment.task_id, comment.comment!);
+      results.push(`✓ Comment added to "${comment.task_title}"`);
+    } catch (err) {
+      errors++;
+      console.error('[bot] Within: comment failed for', comment.task_id, err instanceof Error ? err.message : err);
+    }
+  }
+
+  for (const newTask of proposal.new_tasks) {
+    try {
+      const created = await createWithinTask(newTask.title, newTask.due_date);
+      results.push(`✓ Created "${created.title}"`);
+    } catch (err) {
+      errors++;
+      console.error('[bot] Within: create task failed for', newTask.title, err instanceof Error ? err.message : err);
+    }
+  }
+
+  if (results.length === 0 && errors === 0) {
+    await reply('Nothing to execute — proposal was empty.');
+  } else {
+    const errNote = errors ? `\n\n⚠️ ${errors} change(s) failed — check logs.` : '';
+    await reply(`Within Notion updated ✓\n\n${results.join('\n')}${errNote}`);
+  }
 }
 
 // Handle text messages
@@ -1218,6 +1362,11 @@ schedulerEvents.on('checkin_prompt_sent', (event: CheckinPromptEvent) => {
     periodEnd: event.periodEnd,
   });
   console.log('[bot] check-in session set for chat', event.chatId, '| week:', event.weekLabel);
+});
+
+// /within command — trigger a Within Notion review at any time
+bot.command('within', async (ctx) => {
+  await startWithinReview(ctx.chat.id, (msg) => ctx.reply(msg));
 });
 
 // /checkin command — trigger a manual check-in at any time

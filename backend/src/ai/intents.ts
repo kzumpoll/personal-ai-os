@@ -24,6 +24,7 @@ export type IntentType =
   | 'weekly_review'
   | 'set_idea_next_step'
   | 'promote_idea_to_project'
+  | 'within_review'
   | 'undo_last'
   | 'unknown';
 
@@ -220,6 +221,11 @@ export interface PromoteIdeaToProjectIntent {
   };
 }
 
+export interface WithinReviewIntent {
+  intent: 'within_review';
+  data: Record<string, never>;
+}
+
 export interface UnknownIntent {
   intent: 'unknown';
   data: {
@@ -251,6 +257,7 @@ export type Intent =
   | WeeklyReviewIntent
   | SetIdeaNextStepIntent
   | PromoteIdeaToProjectIntent
+  | WithinReviewIntent
   | UndoLastIntent
   | UnknownIntent;
 

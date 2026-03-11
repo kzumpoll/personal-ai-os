@@ -826,10 +826,12 @@ set_idea_next_step:  { "intent": "set_idea_next_step",  "data": { "position": 2,
 promote_idea_to_project: { "intent": "promote_idea_to_project", "data": { "position": 3, "idea_content": "..." } }
 daily_debrief:       { "intent": "daily_debrief",       "data": {} }
 weekly_review:       { "intent": "weekly_review",       "data": {} }
+within_review:       { "intent": "within_review",       "data": {} }
 undo_last:           { "intent": "undo_last",           "data": {} }
 unknown:             { "intent": "unknown",             "data": { "message": "..." } }
 
 App intent rules:
+- "let's update the within notion", "sync within tasks", "update fay on what i've been doing", "review the within tasks", "let's update fay", "within update", "notion update" → within_review, HIGH, confirm:false
 - Default due_date for new tasks: Today date from context (unless user specifies another date)
 - "today" → Today date from context; "tomorrow" → Tomorrow date; resolve relative dates from context
 - Goal vs Task: goal = aspiration/outcome over weeks/months; task = single actionable step
@@ -935,4 +937,227 @@ Message: ${userMessage}`;
     console.error('[interpretUserIntent] parse error — raw:', text.slice(0, 200));
     return { type: 'casual', reply: "Sorry, I lost my train of thought — could you say that again?" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Within Notion proposal generation
+// ---------------------------------------------------------------------------
+
+export interface WithinProposalItem {
+  task_id: string;
+  task_title: string;
+  new_due_date?: string;
+  comment?: string;
+  reason?: string;
+}
+
+export interface WithinNewTask {
+  title: string;
+  due_date: string | null;
+  reason: string;
+}
+
+export interface WithinProposal {
+  date_changes: WithinProposalItem[];
+  comments: WithinProposalItem[];
+  new_tasks: WithinNewTask[];
+}
+
+export interface WithinContext {
+  today: string;
+  wins: string[];
+  journal_mit: string | null;
+  journal_p1: string | null;
+  journal_p2: string | null;
+  journal_notes: string | null;
+  personal_tasks: Array<{ title: string; due_date: string | null }>;
+}
+
+const WITHIN_SYSTEM_PROMPT = `You are helping update a shared Notion project database. Output RAW JSON only. No markdown. No prose. Start with { end with }.`;
+
+/**
+ * Generate a structured proposal for updating the Within Notion database.
+ * Uses today's wins, journal, and personal tasks as context.
+ */
+export async function generateWithinProposal(
+  withinTasks: {
+    overdue: Array<{ id: string; title: string; due_date: string | null; status: string | null }>;
+    due_today: Array<{ id: string; title: string; due_date: string | null; status: string | null }>;
+    due_soon: Array<{ id: string; title: string; due_date: string | null; status: string | null }>;
+    no_date: Array<{ id: string; title: string; due_date: string | null; status: string | null }>;
+    tasks: Array<{ id: string; title: string; due_date: string | null; status: string | null }>;
+  },
+  context: WithinContext
+): Promise<WithinProposal> {
+  const fmtTasks = (arr: typeof withinTasks.tasks) =>
+    arr.length
+      ? arr.map((t) => `• [${t.id}] ${t.title}${t.due_date ? ` (due: ${t.due_date})` : ''}${t.status ? ` [${t.status}]` : ''}`).join('\n')
+      : '(none)';
+
+  const prompt = `Today: ${context.today}
+
+=== PERSONAL OS CONTEXT ===
+Focus today:
+${context.journal_mit ? `MIT: ${context.journal_mit}` : ''}
+${context.journal_p1 ? `P1: ${context.journal_p1}` : ''}
+${context.journal_p2 ? `P2: ${context.journal_p2}` : ''}
+${context.journal_notes ? `Notes: ${context.journal_notes}` : ''}
+
+Wins (use these to draft update comments):
+${context.wins.length ? context.wins.map((w) => `• ${w}`).join('\n') : '(none)'}
+
+Personal OS tasks (for semantic matching — identify which Within tasks they relate to):
+${context.personal_tasks.length ? context.personal_tasks.map((t) => `• ${t.title}${t.due_date ? ` (due: ${t.due_date})` : ''}`).join('\n') : '(none)'}
+
+=== WITHIN NOTION TASKS ===
+Overdue (${withinTasks.overdue.length}):
+${fmtTasks(withinTasks.overdue)}
+
+Due today (${withinTasks.due_today.length}):
+${fmtTasks(withinTasks.due_today)}
+
+Due soon — next 3 days (${withinTasks.due_soon.length}):
+${fmtTasks(withinTasks.due_soon)}
+
+No due date (${withinTasks.no_date.length}, showing first 10):
+${fmtTasks(withinTasks.no_date.slice(0, 10))}
+
+=== YOUR TASK ===
+Generate a proposal with three types of changes. Be selective — only propose changes that are clearly useful.
+
+1. DATE CHANGES: Suggest new dates for overdue tasks. Pick realistic dates. Spread them out logically.
+2. COMMENTS: Draft update comments for tasks that relate to current focus/wins. Write as if the user is updating their collaborator Fay. Natural, concise, 1–2 sentences.
+3. NEW TASKS: Suggest creating Within tasks only if a Personal OS task clearly belongs in the shared project. Don't duplicate existing Within tasks.
+
+Return this exact JSON shape (use empty arrays if no proposals):
+{
+  "date_changes": [
+    { "task_id": "notion-page-id", "task_title": "...", "new_due_date": "YYYY-MM-DD", "reason": "brief reason" }
+  ],
+  "comments": [
+    { "task_id": "notion-page-id", "task_title": "...", "comment": "comment text" }
+  ],
+  "new_tasks": [
+    { "title": "task title", "due_date": "YYYY-MM-DD or null", "reason": "brief reason" }
+  ]
+}`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    system: WITHIN_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/m, '').trim();
+    const parsed = JSON.parse(cleaned) as WithinProposal;
+    return {
+      date_changes: parsed.date_changes ?? [],
+      comments: parsed.comments ?? [],
+      new_tasks: parsed.new_tasks ?? [],
+    };
+  } catch {
+    console.error('[generateWithinProposal] parse error — raw:', text.slice(0, 200));
+    return { date_changes: [], comments: [], new_tasks: [] };
+  }
+}
+
+/**
+ * Apply a natural-language correction to a Within proposal.
+ * The user is in the confirmation step and says something like
+ * "don't add comments" or "change the date for X to Mar 20".
+ */
+export async function applyWithinCorrection(
+  currentProposal: WithinProposal,
+  correction: string
+): Promise<WithinProposal> {
+  const prompt = `Current Within Notion update proposal (JSON):
+${JSON.stringify(currentProposal, null, 2)}
+
+User correction: "${correction}"
+
+Apply the correction and return the COMPLETE updated proposal as JSON. Rules:
+- "remove the comment for X" / "skip comments" → remove from comments array
+- "don't create new tasks" / "skip new tasks" → empty new_tasks array
+- "change date for X to Y" → update that entry in date_changes
+- "remove date change for X" → remove from date_changes
+- Keep all unchanged fields exactly as they are
+- Output RAW JSON only. No markdown. No prose. Start with { end with }.
+- Return same shape: { "date_changes": [...], "comments": [...], "new_tasks": [...] }`;
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    system: WITHIN_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*/im, '').replace(/\s*```\s*$/m, '').trim();
+    const parsed = JSON.parse(cleaned) as WithinProposal;
+    return {
+      date_changes: parsed.date_changes ?? [],
+      comments: parsed.comments ?? [],
+      new_tasks: parsed.new_tasks ?? [],
+    };
+  } catch {
+    console.error('[applyWithinCorrection] parse error — raw:', text.slice(0, 200));
+    return currentProposal;
+  }
+}
+
+/** Format a WithinProposal for display in Telegram. */
+export function formatWithinProposal(
+  proposal: WithinProposal,
+  stats: { total: number; overdue: number; due_today: number; due_soon: number }
+): string {
+  const lines = [
+    'Within Notion Update',
+    '─────────────────────',
+    `Active tasks: ${stats.total}  |  Overdue: ${stats.overdue}  |  Today: ${stats.due_today}  |  Soon: ${stats.due_soon}`,
+    '',
+  ];
+
+  const isEmpty =
+    proposal.date_changes.length === 0 &&
+    proposal.comments.length === 0 &&
+    proposal.new_tasks.length === 0;
+
+  if (isEmpty) {
+    lines.push('No changes to propose — everything looks good.');
+    lines.push('\nReply "no" to close.');
+    return lines.join('\n');
+  }
+
+  if (proposal.date_changes.length) {
+    lines.push(`📅 Date updates (${proposal.date_changes.length}):`);
+    for (const c of proposal.date_changes) {
+      lines.push(`• "${c.task_title}" → ${c.new_due_date}${c.reason ? ` (${c.reason})` : ''}`);
+    }
+    lines.push('');
+  }
+
+  if (proposal.comments.length) {
+    lines.push(`💬 Comments to add (${proposal.comments.length}):`);
+    for (const c of proposal.comments) {
+      lines.push(`• "${c.task_title}"\n  → "${c.comment}"`);
+    }
+    lines.push('');
+  }
+
+  if (proposal.new_tasks.length) {
+    lines.push(`➕ New tasks (${proposal.new_tasks.length}):`);
+    for (const t of proposal.new_tasks) {
+      lines.push(`• "${t.title}"${t.due_date ? ` (due: ${t.due_date})` : ''}${t.reason ? ` — ${t.reason}` : ''}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('Reply "yes" to execute, "no" to cancel, or tell me what to change.');
+  return lines.join('\n');
 }
