@@ -62,16 +62,16 @@ export default async function JournalPage() {
                       <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{j.mit}</p>
                     </div>
                   )}
-                  {j.k1 && (
+                  {j.p1 && (
                     <div>
-                      <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>K1</p>
-                      <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{j.k1}</p>
+                      <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>P1</p>
+                      <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{j.p1}</p>
                     </div>
                   )}
-                  {j.k2 && (
+                  {j.p2 && (
                     <div>
-                      <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>K2</p>
-                      <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{j.k2}</p>
+                      <p className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>P2</p>
+                      <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{j.p2}</p>
                     </div>
                   )}
                 </div>

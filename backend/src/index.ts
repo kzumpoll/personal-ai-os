@@ -4,6 +4,7 @@ import pool from './db/client';
 import { bot } from './telegram/bot';
 import { isCalendarConfigured, verifyCalendarConnection, getCalendarDiagnostics } from './services/calendar';
 import { getClaudeCodeStatus, setClaudeCodeStatus } from './db/queries/claude_status';
+import { syncTasksToNotion } from './services/notion';
 
 const app = express();
 app.use(express.json());
@@ -83,6 +84,36 @@ app.patch('/claude-status', async (req: Request, res: Response) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[claude-status] PATCH error:', msg);
     res.status(500).json({ error: 'Failed to update status' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Notion sync endpoint
+// ---------------------------------------------------------------------------
+
+app.post('/notion-sync', async (req: Request, res: Response) => {
+  const secret = process.env.CLAUDE_STATUS_SECRET;
+  if (secret) {
+    const auth = req.headers['authorization'];
+    if (auth !== `Bearer ${secret}`) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const date: string = (req.body as { date?: string }).date ?? today;
+  const createMissing: boolean = (req.body as { create_missing?: boolean }).create_missing ?? false;
+
+  console.log(`[notion-sync] starting sync for date=${date} create_missing=${createMissing}`);
+  try {
+    const result = await syncTasksToNotion(date, createMissing);
+    console.log(`[notion-sync] ${result.summary}`);
+    res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[notion-sync] error:', msg);
+    res.status(500).json({ error: msg });
   }
 });
 

@@ -21,11 +21,14 @@ interface DayPlan {
   schedule: ScheduleBlock[];
   overflow: string[];
   mit_done: boolean;
-  k1_done: boolean;
-  k2_done: boolean;
+  p1_done: boolean;
+  p2_done: boolean;
   planned_mit: string | null;
-  planned_k1: string | null;
-  planned_k2: string | null;
+  planned_p1: string | null;
+  planned_p2: string | null;
+  mit_start_action: string | null;
+  p1_start_action: string | null;
+  p2_start_action: string | null;
 }
 
 async function getData(dateParam?: string) {
@@ -140,8 +143,8 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
 
 const typeColors: Record<string, string> = {
   mit: 'var(--cyan)',
-  k1: 'var(--blue)',
-  k2: 'var(--violet)',
+  p1: 'var(--blue)',
+  p2: 'var(--violet)',
   event: 'var(--green)',
   task: 'var(--text-muted)',
   wake: 'var(--amber)',
@@ -179,7 +182,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
             borderLeft: '3px solid var(--cyan)',
           }}
         >
-          <SectionLabel color="var(--cyan)">Focus — {todayStr}</SectionLabel>
+          <SectionLabel color="var(--cyan)">Focus</SectionLabel>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             {journal.mit && (
               <div>
@@ -189,26 +192,41 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                 <p className="text-sm font-medium" style={{ color: dayPlan?.mit_done ? 'var(--text-muted)' : 'var(--text)', textDecoration: dayPlan?.mit_done ? 'line-through' : 'none' }}>
                   {journal.mit}
                 </p>
+                {dayPlan?.mit_start_action && !dayPlan.mit_done && (
+                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
+                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.mit_start_action}</span>
+                  </p>
+                )}
               </div>
             )}
-            {journal.k1 && (
+            {journal.p1 && (
               <div>
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>
-                  K1 {dayPlan?.k1_done && '✅'}
+                  P1 {dayPlan?.p1_done && '✅'}
                 </p>
-                <p className="text-sm" style={{ color: dayPlan?.k1_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k1_done ? 'line-through' : 'none' }}>
-                  {journal.k1}
+                <p className="text-sm" style={{ color: dayPlan?.p1_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.p1_done ? 'line-through' : 'none' }}>
+                  {journal.p1}
                 </p>
+                {dayPlan?.p1_start_action && !dayPlan.p1_done && (
+                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
+                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.p1_start_action}</span>
+                  </p>
+                )}
               </div>
             )}
-            {journal.k2 && (
+            {journal.p2 && (
               <div>
                 <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>
-                  K2 {dayPlan?.k2_done && '✅'}
+                  P2 {dayPlan?.p2_done && '✅'}
                 </p>
-                <p className="text-sm" style={{ color: dayPlan?.k2_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.k2_done ? 'line-through' : 'none' }}>
-                  {journal.k2}
+                <p className="text-sm" style={{ color: dayPlan?.p2_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.p2_done ? 'line-through' : 'none' }}>
+                  {journal.p2}
                 </p>
+                {dayPlan?.p2_start_action && !dayPlan.p2_done && (
+                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
+                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.p2_start_action}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -227,9 +245,9 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
           style={{ border: '1px dashed var(--border)' }}
         >
           {/* Show planned priorities from day_plan if they exist (useful for tomorrow view) */}
-          {(dayPlan?.planned_mit || dayPlan?.planned_k1 || dayPlan?.planned_k2) ? (
+          {(dayPlan?.planned_mit || dayPlan?.planned_p1 || dayPlan?.planned_p2) ? (
             <>
-              <SectionLabel color="var(--cyan)">Planned Focus — {todayStr}</SectionLabel>
+              <SectionLabel color="var(--cyan)">Planned Focus</SectionLabel>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-3">
                 {dayPlan.planned_mit && (
                   <div>
@@ -237,16 +255,16 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
                     <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{dayPlan.planned_mit}</p>
                   </div>
                 )}
-                {dayPlan.planned_k1 && (
+                {dayPlan.planned_p1 && (
                   <div>
-                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>K1</p>
-                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k1}</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>P1</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_p1}</p>
                   </div>
                 )}
-                {dayPlan.planned_k2 && (
+                {dayPlan.planned_p2 && (
                   <div>
-                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>K2</p>
-                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_k2}</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>P2</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{dayPlan.planned_p2}</p>
                   </div>
                 )}
               </div>
@@ -307,8 +325,8 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
               .map((block, i) => {
                 const done =
                   (block.type === 'mit' && dayPlan.mit_done) ||
-                  (block.type === 'k1'  && dayPlan.k1_done)  ||
-                  (block.type === 'k2'  && dayPlan.k2_done);
+                  (block.type === 'p1'  && dayPlan.p1_done)  ||
+                  (block.type === 'p2'  && dayPlan.p2_done);
                 const color = done ? 'var(--green)' : (typeColors[block.type] ?? 'var(--text-muted)');
                 return (
                   <div key={i} className="flex items-center gap-3">

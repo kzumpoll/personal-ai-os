@@ -6,8 +6,8 @@
  *   - Work starts 30 minutes after wake (morning routine)
  *   - No separate "Work start" block in the output schedule
  *   - First work block is always "Clear Inbox" (60 min)
- *   - Order: Clear Inbox → MIT → K1 → K2 → calendar events (interspersed) → other tasks
- *   - Default durations: Clear Inbox 60min, MIT 90min, K1 60min, K2 60min, tasks 30min
+ *   - Order: Clear Inbox → MIT → P1 → P2 → calendar events (interspersed) → other tasks
+ *   - Default durations: Clear Inbox 60min, MIT 90min, P1 60min, P2 60min, tasks 30min
  *   - Plan until 22:30 by default
  *   - Lunch: always 30 min, placed in first free slot between 12:00–15:00
  *   - Pre-event buffer: 30 min "Prep / Leave" block added before physical activity events
@@ -84,14 +84,14 @@ export function generateDayPlan(params: {
   wakeTime: string;           // HH:MM
   calendarEvents: CalendarEvent[];
   mit?: string;
-  k1?: string;
-  k2?: string;
+  p1?: string;
+  p2?: string;
   otherTasks?: string[];      // task titles
   workEnd?: string;           // HH:MM, default 22:30
   ignoredEventIds?: string[]; // exact Google Calendar event IDs to exclude
 }): { schedule: ScheduleBlock[]; overflow: string[]; work_start: string } {
   const {
-    wakeTime, calendarEvents, mit, k1, k2,
+    wakeTime, calendarEvents, mit, p1, p2,
     otherTasks = [], workEnd = '22:30',
     ignoredEventIds = [],
   } = params;
@@ -129,8 +129,8 @@ export function generateDayPlan(params: {
   const taskSlots: TaskSlot[] = [];
   taskSlots.push({ title: 'Clear Inbox', type: 'task', duration_min: 60 });
   if (mit) taskSlots.push({ title: mit, type: 'mit', duration_min: 90 });
-  if (k1)  taskSlots.push({ title: k1,  type: 'k1',  duration_min: 60 });
-  if (k2)  taskSlots.push({ title: k2,  type: 'k2',  duration_min: 60 });
+  if (p1)  taskSlots.push({ title: p1,  type: 'p1',  duration_min: 60 });
+  if (p2)  taskSlots.push({ title: p2,  type: 'p2',  duration_min: 60 });
   for (const t of otherTasks) {
     taskSlots.push({ title: t, type: 'task', duration_min: 30 });
   }
@@ -249,7 +249,7 @@ export function formatAgendaForBot(
   schedule: ScheduleBlock[],
   overflow: string[],
   planDate: string,
-  completions?: { mit_done?: boolean; k1_done?: boolean; k2_done?: boolean }
+  completions?: { mit_done?: boolean; p1_done?: boolean; p2_done?: boolean }
 ): string {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const parts = planDate.split('-').map(Number);
@@ -259,8 +259,8 @@ export function formatAgendaForBot(
     wake: '☀️',
     event: '📅',
     mit: '🎯',
-    k1: '▶️',
-    k2: '▷',
+    p1: '▶️',
+    p2: '▷',
     task: '•',
     break: '☕',
     free: '⬜',
@@ -268,8 +268,8 @@ export function formatAgendaForBot(
 
   const isDone = (type: string): boolean => {
     if (type === 'mit') return completions?.mit_done ?? false;
-    if (type === 'k1')  return completions?.k1_done  ?? false;
-    if (type === 'k2')  return completions?.k2_done  ?? false;
+    if (type === 'p1')  return completions?.p1_done  ?? false;
+    if (type === 'p2')  return completions?.p2_done  ?? false;
     return false;
   };
 

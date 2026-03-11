@@ -173,13 +173,16 @@ export interface DailyDebriefIntent {
 export interface SaveDebriefIntent {
   intent: 'save_debrief';
   data: {
-    entry_date: string;   // YYYY-MM-DD — plan date (MIT/K1/K2 stored here)
+    entry_date: string;   // YYYY-MM-DD — plan date (MIT/P1/P2 stored here)
     debrief_date?: string; // YYYY-MM-DD — date being debriefed (journal/wins stored here)
     wake_time?: string;   // HH:MM — wake time for the plan date
     work_start?: string;  // HH:MM — work start time (defaults to wake_time + 1hr)
     mit?: string;
-    k1?: string;
-    k2?: string;
+    p1?: string;
+    p2?: string;
+    mit_start_action?: string;
+    p1_start_action?: string;
+    p2_start_action?: string;
     open_journal?: string;
     wins?: string[];
     task_completions?: string[]; // task ids to mark done

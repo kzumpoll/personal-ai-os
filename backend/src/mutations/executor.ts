@@ -15,7 +15,7 @@ import { createWin, getAllWins } from '../db/queries/wins';
 import { createGoal, getActiveGoals, getAllGoals } from '../db/queries/goals';
 import { createResource, getAllResources } from '../db/queries/resources';
 import { upsertJournal } from '../db/queries/journals';
-import { upsertDayPlan } from '../db/queries/day_plans';
+import { upsertDayPlan, setDayPlanIntentions } from '../db/queries/day_plans';
 import { getEventsForDate } from '../services/calendar';
 import { generateDayPlan, formatAgendaForBot } from '../services/dayplan';
 import pool from '../db/client';
@@ -530,7 +530,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'save_debrief': {
-      const { entry_date, debrief_date, wake_time, work_start, mit, k1, k2, open_journal, wins, task_completions, task_due_date_changes, task_deletions } =
+      const { entry_date, debrief_date, wake_time, work_start, mit, p1, p2, open_journal, wins, task_completions, task_due_date_changes, task_deletions } =
         intent.data;
       // entry_date = planDate (MIT/K1/K2), debrief_date = day being debriefed (journal/wins)
       const journalDate = debrief_date ?? entry_date;
@@ -546,7 +546,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       const isValidUUID = (id: string) => UUID_RE.test(id);
 
-      console.log('[save_debrief] start — entry_date:', entry_date, '| mit:', mit ?? 'none', '| k1:', k1 ?? 'none', '| k2:', k2 ?? 'none');
+      console.log('[save_debrief] start — entry_date:', entry_date, '| mit:', mit ?? 'none', '| p1:', p1 ?? 'none', '| p2:', p2 ?? 'none');
       console.log('[save_debrief] task_completions payload:', JSON.stringify(task_completions ?? []));
       console.log('[save_debrief] task_due_date_changes payload:', JSON.stringify(task_due_date_changes ?? []));
 
@@ -562,9 +562,9 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         after_data: journal as unknown as Record<string, unknown>,
       });
 
-      // Save MIT/K1/K2 under the plan date (entry_date) if they differ
-      if (mit || k1 || k2) {
-        await upsertJournal({ entry_date, mit, k1, k2 });
+      // Save MIT/P1/P2 under the plan date (entry_date) if they differ
+      if (mit || p1 || p2) {
+        await upsertJournal({ entry_date, mit, p1, p2 });
       }
 
       const messages: string[] = [`Journal for ${journalDate} saved.`];
@@ -683,8 +683,8 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
             wakeTime: wake_time,
             calendarEvents: calEvents,
             mit,
-            k1,
-            k2,
+            p1,
+            p2,
           });
           const plan = await upsertDayPlan({
             plan_date: entry_date,
@@ -694,6 +694,14 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
             overflow,
           });
           console.log('[save_debrief] day plan saved — id:', plan.id);
+          const startActions = intent.data as { mit_start_action?: string; p1_start_action?: string; p2_start_action?: string };
+          if (startActions.mit_start_action || startActions.p1_start_action || startActions.p2_start_action) {
+            await setDayPlanIntentions(entry_date, {
+              mit_start_action: startActions.mit_start_action,
+              p1_start_action: startActions.p1_start_action,
+              p2_start_action: startActions.p2_start_action,
+            });
+          }
           const agendaText = formatAgendaForBot(schedule, overflow, entry_date);
           messages.push('');
           messages.push(agendaText);

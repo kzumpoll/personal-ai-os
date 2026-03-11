@@ -237,16 +237,16 @@ export default async function CommandCenterPage() {
                     <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{journal.mit}</p>
                   </div>
                 )}
-                {journal.k1 && (
+                {journal.p1 && (
                   <div>
-                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 4 }}>K1</p>
-                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.k1}</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 4 }}>P1</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.p1}</p>
                   </div>
                 )}
-                {journal.k2 && (
+                {journal.p2 && (
                   <div>
-                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 4 }}>K2</p>
-                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.k2}</p>
+                    <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 4 }}>P2</p>
+                    <p className="text-sm" style={{ color: 'var(--text-dim)' }}>{journal.p2}</p>
                   </div>
                 )}
               </div>
@@ -408,7 +408,7 @@ export default async function CommandCenterPage() {
                 <div className="flex flex-col gap-2">
                   {recentCommits.map((c) => {
                     const sha = c.sha.slice(0, 7);
-                    const msg = c.commit.message.split('\n')[0].slice(0, 60);
+                    const msg = c.commit.message.split('\n')[0].slice(0, 120);
                     const ago = formatDistanceToNow(new Date(c.commit.author.date), { addSuffix: true });
                     const isCurrent = sha === deployedSha;
                     return (
@@ -416,7 +416,7 @@ export default async function CommandCenterPage() {
                         <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: isCurrent ? 'var(--cyan)' : 'var(--text-faint)', minWidth: 52, flexShrink: 0 }}>
                           {isCurrent ? `▶ ${sha}` : sha}
                         </span>
-                        <span className="text-xs truncate flex-1" style={{ color: isCurrent ? 'var(--text)' : 'var(--text-dim)' }}>{msg}</span>
+                        <span className="text-xs flex-1" style={{ color: isCurrent ? 'var(--text)' : 'var(--text-dim)' }}>{msg}</span>
                         <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)', flexShrink: 0 }}>{ago}</span>
                       </div>
                     );

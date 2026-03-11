@@ -17,6 +17,18 @@ const QUARTER_END: Record<string, string> = {
   Q1: 'Mar 31', Q2: 'Jun 30', Q3: 'Sep 30', Q4: 'Dec 31',
 };
 
+const QUARTER_COLORS: Record<string, string> = {
+  Q1: 'var(--cyan)',
+  Q2: 'var(--green)',
+  Q3: 'var(--amber)',
+  Q4: 'var(--violet)',
+};
+
+function quarterColor(quarter: string): string {
+  const q = quarter.split('-')[1] ?? '';
+  return QUARTER_COLORS[q] ?? 'var(--text-muted)';
+}
+
 function quarterEndLabel(quarter: string): string {
   const [year, q] = quarter.split('-');
   const end = QUARTER_END[q];
@@ -44,7 +56,7 @@ export default async function GoalsPage() {
     if (!byQuarter.has(q)) byQuarter.set(q, []);
     byQuarter.get(q)!.push(g);
   }
-  const quarters = Array.from(byQuarter.keys()).sort((a, b) => b.localeCompare(a));
+  const quarters = Array.from(byQuarter.keys()).sort((a, b) => a.localeCompare(b));
 
   const now = new Date();
   const currentQuarter = `${now.getFullYear()}-Q${Math.ceil((now.getMonth() + 1) / 3)}`;
@@ -52,6 +64,23 @@ export default async function GoalsPage() {
   return (
     <div className="max-w-2xl mx-auto">
       <PageHeader title="Goals" subtitle={`${active.length} active`} />
+
+      {/* Goals to consider */}
+      <div className="mb-8">
+        <div className="flex items-center gap-3 mb-3">
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600 }}>
+            Goals to consider
+          </span>
+          <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+        </div>
+        <div className="flex flex-col gap-2">
+          {['Spanish', 'Padel'].map((item) => (
+            <div key={item} className="rounded-lg px-4 py-2.5" style={{ border: '1px dashed var(--border)', background: 'var(--bg)' }}>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{item}</p>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {active.length === 0 && (
         <p className="text-sm" style={{ color: 'var(--text-faint)' }}>No goals yet. Add one via Telegram.</p>
@@ -71,11 +100,11 @@ export default async function GoalsPage() {
                   fontSize: '10px',
                   letterSpacing: '0.14em',
                   textTransform: 'uppercase',
-                  color: isCurrent ? 'var(--cyan)' : 'var(--text-muted)',
+                  color: quarterColor(quarter),
                   fontWeight: 600,
                 }}
               >
-                {q} {year}
+                {q} — {quarterEndLabel(quarter)}
               </span>
               {isCurrent && (
                 <span
@@ -85,9 +114,6 @@ export default async function GoalsPage() {
                   current
                 </span>
               )}
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>
-                {quarterEndLabel(quarter)}
-              </span>
               <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
               <span style={{ fontFamily: "var(--font-mono)", fontSize: '10px', color: 'var(--text-faint)' }}>
                 {qGoals.length}

@@ -93,8 +93,8 @@ async function regeneratePlanFor(
   }
 
   // Build task candidates: overdue first (most urgent), then today's tasks.
-  // Deduplicate by title and exclude MIT/K1/K2 (already in focus blocks).
-  const focusTitles = new Set([journal?.mit, journal?.k1, journal?.k2].filter(Boolean));
+  // Deduplicate by title and exclude MIT/P1/P2 (already in focus blocks).
+  const focusTitles = new Set([journal?.mit, journal?.p1, journal?.p2].filter(Boolean));
   const seen = new Set<string>();
   const otherTasks = [...overdueTasks, ...todayTasks]
     .filter((t) => {
@@ -108,8 +108,8 @@ async function regeneratePlanFor(
     wakeTime,
     calendarEvents,
     mit: journal?.mit ?? undefined,
-    k1: journal?.k1 ?? undefined,
-    k2: journal?.k2 ?? undefined,
+    p1: journal?.p1 ?? undefined,
+    p2: journal?.p2 ?? undefined,
     otherTasks,
     ignoredEventIds: ignoredIds,
   });
@@ -269,21 +269,21 @@ async function applyDayPlanMutation(
       break;
     }
 
-    case 'complete_k1': {
-      await setFocusCompletion(planDate, 'k1_done', true);
+    case 'complete_p1': {
+      await setFocusCompletion(planDate, 'p1_done', true);
       const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
-      const updated = p ? { ...p, k1_done: true } : undefined;
+      const updated = p ? { ...p, p1_done: true } : undefined;
       const agenda = p ? formatAgendaForBot(p.schedule, p.overflow, planDate, updated) : undefined;
-      await reply(agenda ? `K1 marked done ✅\n\n${agenda}` : 'K1 marked done ✅');
+      await reply(agenda ? `P1 marked done ✅\n\n${agenda}` : 'P1 marked done ✅');
       break;
     }
 
-    case 'complete_k2': {
-      await setFocusCompletion(planDate, 'k2_done', true);
+    case 'complete_p2': {
+      await setFocusCompletion(planDate, 'p2_done', true);
       const p = plan as Awaited<ReturnType<typeof getDayPlanByDate>>;
-      const updated = p ? { ...p, k2_done: true } : undefined;
+      const updated = p ? { ...p, p2_done: true } : undefined;
       const agenda = p ? formatAgendaForBot(p.schedule, p.overflow, planDate, updated) : undefined;
-      await reply(agenda ? `K2 marked done ✅\n\n${agenda}` : 'K2 marked done ✅');
+      await reply(agenda ? `P2 marked done ✅\n\n${agenda}` : 'P2 marked done ✅');
       break;
     }
 
@@ -310,27 +310,27 @@ async function applyDayPlanMutation(
       break;
     }
 
-    case 'set_k1': {
-      const value = mutation.k1_value ?? '';
+    case 'set_p1': {
+      const value = mutation.p1_value ?? '';
       const targetDate = mutation.target_date ?? planDate;
       if (!value) {
-        await reply('What should K1 be?');
+        await reply('What should P1 be?');
         return;
       }
-      await setDayPlanIntentions(targetDate, { planned_k1: value });
-      await reply(`K1 for ${targetDate} set: "${value}"`);
+      await setDayPlanIntentions(targetDate, { planned_p1: value });
+      await reply(`P1 for ${targetDate} set: "${value}"`);
       break;
     }
 
-    case 'set_k2': {
-      const value = mutation.k2_value ?? '';
+    case 'set_p2': {
+      const value = mutation.p2_value ?? '';
       const targetDate = mutation.target_date ?? planDate;
       if (!value) {
-        await reply('What should K2 be?');
+        await reply('What should P2 be?');
         return;
       }
-      await setDayPlanIntentions(targetDate, { planned_k2: value });
-      await reply(`K2 for ${targetDate} set: "${value}"`);
+      await setDayPlanIntentions(targetDate, { planned_p2: value });
+      await reply(`P2 for ${targetDate} set: "${value}"`);
       break;
     }
 
@@ -835,8 +835,8 @@ async function startDebrief(chatId: number, reply: (msg: string) => Promise<unkn
 
   const intentionLines: string[] = [];
   if (plannedIntentions?.planned_mit) intentionLines.push(`Pre-set MIT: ${plannedIntentions.planned_mit}`);
-  if (plannedIntentions?.planned_k1)  intentionLines.push(`Pre-set K1:  ${plannedIntentions.planned_k1}`);
-  if (plannedIntentions?.planned_k2)  intentionLines.push(`Pre-set K2:  ${plannedIntentions.planned_k2}`);
+  if (plannedIntentions?.planned_p1)  intentionLines.push(`Pre-set P1:  ${plannedIntentions.planned_p1}`);
+  if (plannedIntentions?.planned_p2)  intentionLines.push(`Pre-set P2:  ${plannedIntentions.planned_p2}`);
   const intentionSection = intentionLines.length ? `\nPre-planned focus (can override):\n${intentionLines.join('\n')}\n` : '';
 
   const winsSection = existingWins.length
@@ -844,7 +844,7 @@ async function startDebrief(chatId: number, reply: (msg: string) => Promise<unkn
     : '';
 
   await reply(
-    `Daily Debrief\nDebriefing: ${fmtDate(debriefDate)}\nPlanning: ${fmtDate(planDate)}\n\nOpen tasks:\n${taskSummary}\n${intentionSection}${winsSection}\nReply with your wake time, MIT, K1, K2, reflections, and wins.\nExample:\nWake: 07:00\nMIT: Finish proposal\nK1: Review PR\nK2: Email client\nJournal: Good focus day\nWins: Shipped feature, hit inbox zero\n\nInclude "Wake: HH:MM" to get a generated day plan.\nSend "cancel" to exit.`
+    `Daily Debrief\nDebriefing: ${fmtDate(debriefDate)}\nPlanning: ${fmtDate(planDate)}\n\nOpen tasks:\n${taskSummary}\n${intentionSection}${winsSection}\nReply with your wake time, MIT, P1, P2, reflections, and wins.\nExample:\nWake: 07:00\nMIT: Finish proposal\nP1: Review PR\nP2: Email client\nJournal: Good focus day\nWins: Shipped feature, hit inbox zero\n\nInclude "Wake: HH:MM" to get a generated day plan.\nSend "cancel" to exit.`
   );
 }
 
@@ -956,7 +956,7 @@ async function handleReviewCommand(chatId: number, reply: (msg: string) => Promi
         [weekStart]
       ),
       pool.query(
-        `SELECT entry_date, mit, k1, k2, open_journal FROM journals WHERE entry_date >= $1 ORDER BY entry_date DESC LIMIT 7`,
+        `SELECT entry_date, mit, p1, p2, open_journal FROM journals WHERE entry_date >= $1 ORDER BY entry_date DESC LIMIT 7`,
         [weekStart]
       ),
       pool.query(`SELECT title, target_date FROM goals WHERE status = 'active' ORDER BY created_at DESC LIMIT 5`),
@@ -995,7 +995,7 @@ async function handleReviewCommand(chatId: number, reply: (msg: string) => Promi
       journalsRes.rows.forEach((j) => {
         const parts = [`${fmtDate(j.entry_date)}:`];
         if (j.mit) parts.push(`MIT: ${j.mit}`);
-        if (j.k1) parts.push(`K1: ${j.k1}`);
+        if (j.p1) parts.push(`P1: ${j.p1}`);
         if (j.open_journal) parts.push(`Note: ${j.open_journal.slice(0, 80)}`);
         if (parts.length > 1) lines.push(`  ${parts.join(' | ')}`);
       });

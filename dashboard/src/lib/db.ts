@@ -100,8 +100,8 @@ export interface Journal {
   id: string;
   entry_date: string;
   mit: string | null;
-  k1: string | null;
-  k2: string | null;
+  p1: string | null;
+  p2: string | null;
   open_journal: string | null;
   wins_json: string[] | null;
   created_at: string;

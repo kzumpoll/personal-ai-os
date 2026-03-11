@@ -5,7 +5,7 @@ import { ContextPack, contextPackToString } from './context';
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export interface DayPlanMutation {
-  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_k1' | 'set_k2' | 'complete_mit' | 'complete_k1' | 'complete_k2' | 'plan_question' | 'add_block' | 'rename_block' | 'resize_block' | 'unknown';
+  type: 'show' | 'remove_event' | 'change_wake_time' | 'move_block' | 'remove_block' | 'regenerate' | 'log_win' | 'set_mit' | 'set_p1' | 'set_p2' | 'complete_mit' | 'complete_p1' | 'complete_p2' | 'plan_question' | 'add_block' | 'rename_block' | 'resize_block' | 'unknown';
   event_id?: string;       // for remove_event
   event_title?: string;    // for remove_event (display)
   new_time?: string;       // for change_wake_time (HH:MM)
@@ -15,9 +15,9 @@ export interface DayPlanMutation {
   duration_min?: number;   // for add_block, resize_block
   win_content?: string;    // for log_win
   mit_value?: string;      // for set_mit
-  k1_value?: string;       // for set_k1
-  k2_value?: string;       // for set_k2
-  target_date?: string;    // for set_mit/k1/k2 (YYYY-MM-DD)
+  p1_value?: string;       // for set_p1
+  p2_value?: string;       // for set_p2
+  target_date?: string;    // for set_mit/p1/p2 (YYYY-MM-DD)
   answer_text?: string;    // for plan_question
   message?: string;        // for unknown
 }
@@ -366,7 +366,7 @@ Extract from their message:
 - wake_time (HH:MM for ${planDate}; "7am"→"07:00", "6:30"→"06:30")
 - work_start (HH:MM, optional)
 - MIT (Most Important Task for ${planDate})
-- K1, K2 (next 2 priority tasks for ${planDate})
+- P1, P2 (next 2 priority tasks for ${planDate})
 - open_journal (reflections, notes, thoughts from ${debriefDate})
 - wins (list of wins from ${debriefDate})
 - task_completions (full UUIDs of tasks marked done — match by position or name)
@@ -390,8 +390,11 @@ Return this exact JSON shape (omit fields that are not mentioned; do not include
     "wake_time": "HH:MM",
     "work_start": "HH:MM",
     "mit": "...",
-    "k1": "...",
-    "k2": "...",
+    "p1": "...",
+    "p2": "...",
+    "mit_start_action": "one-sentence first step for MIT (max 15 words)",
+    "p1_start_action": "one-sentence first step for P1 (max 15 words)",
+    "p2_start_action": "one-sentence first step for P2 (max 15 words)",
     "open_journal": "...",
     "wins": ["...", "..."],
     "task_completions": ["full-uuid-1"],
@@ -455,8 +458,8 @@ export async function confirmDebriefSummary(
 
   if (d.wake_time) lines.push(`Wake: ${d.wake_time}`);
   if (d.mit) lines.push(`MIT: ${d.mit}`);
-  if (d.k1) lines.push(`K1: ${d.k1}`);
-  if (d.k2) lines.push(`K2: ${d.k2}`);
+  if (d.p1) lines.push(`P1: ${d.p1}`);
+  if (d.p2) lines.push(`P2: ${d.p2}`);
   if (d.open_journal) lines.push(`Journal: ${d.open_journal}`);
   if (d.wins?.length) lines.push(`Wins: ${d.wins.join(', ')}`);
 
@@ -642,17 +645,17 @@ FOR clarify:
   → Set the Most Important Task for the plan date.
   → target_date defaults to Today unless the user specifies tomorrow.
 
-{ "type": "set_k1", "k1_value": "<task title>", "target_date": "YYYY-MM-DD" }
-{ "type": "set_k2", "k2_value": "<task title>", "target_date": "YYYY-MM-DD" }
+{ "type": "set_p1", "p1_value": "<task title>", "target_date": "YYYY-MM-DD" }
+{ "type": "set_p2", "p2_value": "<task title>", "target_date": "YYYY-MM-DD" }
 
 { "type": "complete_mit" }
   → Mark the MIT as done for today. The user has finished their most important task.
 
-{ "type": "complete_k1" }
-  → Mark K1 as done for today.
+{ "type": "complete_p1" }
+  → Mark P1 as done for today.
 
-{ "type": "complete_k2" }
-  → Mark K2 as done for today.
+{ "type": "complete_p2" }
+  → Mark P2 as done for today.
 
 { "type": "add_block", "block_title": "<title>", "new_start": "HH:MM", "duration_min": <minutes> }
   → Add a new block to the schedule at a specified time.

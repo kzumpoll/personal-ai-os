@@ -13,7 +13,7 @@ export interface ContextPack {
   tomorrowTasks: Array<{ id: string; title: string }>;
   next7Tasks: Array<{ id: string; title: string; due_date: string | null }>;
   goals: Array<{ id: string; title: string; target_date: string | null }>;
-  todayJournal: { mit: string | null; k1: string | null; k2: string | null } | null;
+  todayJournal: { mit: string | null; p1: string | null; p2: string | null } | null;
   calendarEvents: CalendarEvent[];
 }
 
@@ -51,7 +51,7 @@ export async function buildContextPack(now?: Date): Promise<ContextPack> {
     next7Tasks: next7Tasks.map((t) => ({ id: t.id, title: t.title, due_date: t.due_date })),
     goals: goals.map((g) => ({ id: g.id, title: g.title, target_date: g.target_date })),
     todayJournal: todayJournal
-      ? { mit: todayJournal.mit, k1: todayJournal.k1, k2: todayJournal.k2 }
+      ? { mit: todayJournal.mit, p1: todayJournal.p1, p2: todayJournal.p2 }
       : null,
     calendarEvents,
   };
@@ -97,8 +97,8 @@ export function contextPackToString(ctx: ContextPack): string {
   if (ctx.todayJournal) {
     lines.push(`TODAY'S JOURNAL:`);
     if (ctx.todayJournal.mit) lines.push(`  MIT: ${ctx.todayJournal.mit}`);
-    if (ctx.todayJournal.k1) lines.push(`  K1: ${ctx.todayJournal.k1}`);
-    if (ctx.todayJournal.k2) lines.push(`  K2: ${ctx.todayJournal.k2}`);
+    if (ctx.todayJournal.p1) lines.push(`  P1: ${ctx.todayJournal.p1}`);
+    if (ctx.todayJournal.p2) lines.push(`  P2: ${ctx.todayJournal.p2}`);
     lines.push('');
   }
 

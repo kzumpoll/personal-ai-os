@@ -3,7 +3,7 @@ import pool from '../client';
 export interface ScheduleBlock {
   time: string;         // HH:MM
   title: string;
-  type: 'event' | 'mit' | 'k1' | 'k2' | 'task' | 'break' | 'free' | 'wake' | 'work_start';
+  type: 'event' | 'mit' | 'p1' | 'p2' | 'task' | 'break' | 'free' | 'wake' | 'work_start';
   duration_min: number;
 }
 
@@ -28,12 +28,16 @@ export interface DayPlan {
   ignored_event_snapshots: IgnoredEventSnapshot[];
   /** Pre-planned focus items for the day — can be set before the debrief */
   planned_mit: string | null;
-  planned_k1: string | null;
-  planned_k2: string | null;
+  planned_p1: string | null;
+  planned_p2: string | null;
   /** Intra-day completion flags for focus blocks */
   mit_done: boolean;
-  k1_done: boolean;
-  k2_done: boolean;
+  p1_done: boolean;
+  p2_done: boolean;
+  /** 2-minute start actions for focus blocks */
+  mit_start_action: string | null;
+  p1_start_action: string | null;
+  p2_start_action: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,11 +62,11 @@ export async function upsertDayPlan(data: {
        ignored_event_ids = EXCLUDED.ignored_event_ids,
        ignored_event_snapshots = EXCLUDED.ignored_event_snapshots,
        planned_mit = COALESCE(day_plans.planned_mit, EXCLUDED.planned_mit),
-       planned_k1  = COALESCE(day_plans.planned_k1,  EXCLUDED.planned_k1),
-       planned_k2  = COALESCE(day_plans.planned_k2,  EXCLUDED.planned_k2),
+       planned_p1  = COALESCE(day_plans.planned_p1,  EXCLUDED.planned_p1),
+       planned_p2  = COALESCE(day_plans.planned_p2,  EXCLUDED.planned_p2),
        mit_done    = day_plans.mit_done,
-       k1_done     = day_plans.k1_done,
-       k2_done     = day_plans.k2_done,
+       p1_done     = day_plans.p1_done,
+       p2_done     = day_plans.p2_done,
        updated_at = NOW()
      RETURNING *`,
     [
@@ -87,12 +91,12 @@ export async function getDayPlanByDate(date: string): Promise<DayPlan | null> {
 }
 
 /**
- * Mark MIT, K1, or K2 as done (or un-done) for a given plan date.
+ * Mark MIT, P1, or P2 as done (or un-done) for a given plan date.
  * Persists across plan regenerations — upsertDayPlan preserves these flags.
  */
 export async function setFocusCompletion(
   plan_date: string,
-  field: 'mit_done' | 'k1_done' | 'k2_done',
+  field: 'mit_done' | 'p1_done' | 'p2_done',
   done: boolean
 ): Promise<void> {
   await pool.query(
@@ -103,16 +107,27 @@ export async function setFocusCompletion(
 
 export async function setDayPlanIntentions(
   plan_date: string,
-  data: { planned_mit?: string; planned_k1?: string; planned_k2?: string }
+  data: {
+    planned_mit?: string;
+    planned_p1?: string;
+    planned_p2?: string;
+    mit_start_action?: string;
+    p1_start_action?: string;
+    p2_start_action?: string;
+  }
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO day_plans (plan_date, schedule, overflow, planned_mit, planned_k1, planned_k2)
-     VALUES ($1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4)
+    `INSERT INTO day_plans (plan_date, schedule, overflow, planned_mit, planned_p1, planned_p2, mit_start_action, p1_start_action, p2_start_action)
+     VALUES ($1, '[]'::jsonb, '[]'::jsonb, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (plan_date) DO UPDATE SET
        planned_mit = COALESCE(EXCLUDED.planned_mit, day_plans.planned_mit),
-       planned_k1  = COALESCE(EXCLUDED.planned_k1,  day_plans.planned_k1),
-       planned_k2  = COALESCE(EXCLUDED.planned_k2,  day_plans.planned_k2),
+       planned_p1  = COALESCE(EXCLUDED.planned_p1,  day_plans.planned_p1),
+       planned_p2  = COALESCE(EXCLUDED.planned_p2,  day_plans.planned_p2),
+       mit_start_action = COALESCE(EXCLUDED.mit_start_action, day_plans.mit_start_action),
+       p1_start_action  = COALESCE(EXCLUDED.p1_start_action,  day_plans.p1_start_action),
+       p2_start_action  = COALESCE(EXCLUDED.p2_start_action,  day_plans.p2_start_action),
        updated_at  = NOW()`,
-    [plan_date, data.planned_mit ?? null, data.planned_k1 ?? null, data.planned_k2 ?? null]
+    [plan_date, data.planned_mit ?? null, data.planned_p1 ?? null, data.planned_p2 ?? null,
+     data.mit_start_action ?? null, data.p1_start_action ?? null, data.p2_start_action ?? null]
   );
 }
