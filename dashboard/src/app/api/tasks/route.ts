@@ -22,10 +22,22 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    const { id, due_date, status } = body;
+    const { id, due_date, status, description } = body;
     if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });
 
     let rows: Record<string, unknown>[];
+
+    // ── Description update path ──────────────────────────────────────────────
+    if (description !== undefined && !status && !due_date) {
+      ({ rows } = await pool.query(
+        `UPDATE tasks SET description = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+        [id, description || null]
+      ));
+      if (rows.length === 0) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      revalidatePath('/tasks');
+      return NextResponse.json(rows[0]);
+    }
+
     if (status === 'done') {
       ({ rows } = await pool.query(
         `UPDATE tasks SET status = 'done', completed_at = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *`,

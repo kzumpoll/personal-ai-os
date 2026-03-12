@@ -1698,6 +1698,66 @@ bot.command('checkin', async (ctx) => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Reminder callback handlers
+// ---------------------------------------------------------------------------
+
+bot.action(/^reminder_done:(.+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  const { markReminderDone } = await import('../db/queries/reminders');
+  await markReminderDone(id);
+  await ctx.answerCbQuery('Marked as done');
+  await ctx.editMessageReplyMarkup(undefined);
+  await ctx.reply('Reminder completed.');
+});
+
+bot.action(/^reminder_snooze:(.+):(\d+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  const minutes = parseInt(ctx.match[2], 10);
+  const { snoozeReminder } = await import('../db/queries/reminders');
+  const until = new Date(Date.now() + minutes * 60_000).toISOString();
+  await snoozeReminder(id, until);
+  await ctx.answerCbQuery(`Snoozed for ${minutes}m`);
+  await ctx.editMessageReplyMarkup(undefined);
+  await ctx.reply(`Snoozed — I'll remind you again in ${minutes} minutes.`);
+});
+
+bot.action(/^reminder_reschedule:(.+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await setSession(chatId, { state: 'reminder_reschedule', reminderId: id });
+  }
+  await ctx.answerCbQuery('Send me the new time');
+  await ctx.editMessageReplyMarkup(undefined);
+  await ctx.reply('When should I remind you? Send a date and time (e.g. "tomorrow at 3pm", "Friday 10:00").');
+});
+
+bot.action(/^reminder_cancel:(.+)$/, async (ctx) => {
+  const id = ctx.match[1];
+  const { cancelReminder } = await import('../db/queries/reminders');
+  await cancelReminder(id);
+  await ctx.answerCbQuery('Cancelled');
+  await ctx.editMessageReplyMarkup(undefined);
+  await ctx.reply('Reminder cancelled.');
+});
+
+// ROI message callback handlers
+bot.action(/^roi_set_focus$/, async (ctx) => {
+  await ctx.answerCbQuery('Setting focus...');
+  // The ROI data is stored in the message — we'll parse it in a session state
+  const chatId = ctx.chat?.id;
+  if (chatId) {
+    await setSession(chatId, { state: 'roi_set_focus' });
+    await ctx.reply('Setting top 3 as your MIT, P1, and P2 for today...');
+  }
+});
+
+bot.action(/^roi_regenerate$/, async (ctx) => {
+  await ctx.answerCbQuery('Regenerating...');
+  await ctx.reply('Regenerating your top 3 ROI tasks... (coming soon)');
+});
+
 export async function setupWebhook(app: Express, webhookUrl: string) {
   const path = `/webhook/${process.env.TELEGRAM_BOT_TOKEN}`;
   await bot.telegram.setWebhook(`${webhookUrl}${path}`);

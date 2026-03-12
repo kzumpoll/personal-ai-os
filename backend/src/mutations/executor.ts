@@ -3,6 +3,7 @@ import { logMutation, getLastMutation } from '../db/queries/mutation_log';
 import {
   createTask,
   completeTask,
+  updateTask,
   updateTaskDueDate,
   getOverdueTasks,
   getTasksForDate,
@@ -759,6 +760,52 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
       console.log('[save_debrief] complete — result lines:', messages.length);
       return { success: true, message: messages.join('\n'), data: journal };
+    }
+
+    case 'update_task_description': {
+      const { task_id, task_title, description } = intent.data;
+      let task = null;
+      if (task_id) task = await getTaskById(task_id);
+      if (!task && task_title) task = await getTaskByTitle(task_title);
+      if (!task) return { success: false, message: 'Task not found. Try listing your tasks first.' };
+      const updated = await updateTask(task.id, { description });
+      if (!updated) return { success: false, message: `Could not update description for "${task.title}".` };
+      await logMutation({
+        action: 'update',
+        table_name: 'tasks',
+        record_id: task.id,
+        before_data: task as unknown as Record<string, unknown>,
+        after_data: updated as unknown as Record<string, unknown>,
+      });
+      return { success: true, message: `Description updated for "${task.title}".`, data: updated };
+    }
+
+    case 'create_reminder': {
+      const { title, body, scheduled_at, recipient_name, suggested_message } = intent.data;
+      const { createReminder } = await import('../db/queries/reminders');
+      const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
+      if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders.' };
+      const reminder = await createReminder({
+        chat_id: chatId,
+        title,
+        body,
+        scheduled_at,
+        timezone: process.env.USER_TZ ?? 'UTC',
+        recipient_name: recipient_name ?? null,
+        suggested_message: suggested_message ?? null,
+      });
+      await logMutation({
+        action: 'create',
+        table_name: 'reminders',
+        record_id: reminder.id,
+        before_data: null,
+        after_data: reminder as unknown as Record<string, unknown>,
+      });
+      const when = new Date(scheduled_at).toLocaleString('en-US', {
+        timeZone: process.env.USER_TZ ?? 'UTC',
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      });
+      return { success: true, message: `Reminder set: "${title}" — ${when}`, data: reminder };
     }
 
     case 'undo_last': {

@@ -16,25 +16,19 @@ import {
 import { Task } from '@/lib/db';
 import TaskCard from './TaskCard';
 import TaskQuickAdd from './TaskQuickAdd';
+import TaskDetailPanel from './TaskDetailPanel';
 
-type Bucket = 'overdue' | 'today' | 'tomorrow' | 'next7' | 'future';
-
-const bucketMeta: Record<Bucket, { label: string; color: string }> = {
-  overdue:  { label: 'Overdue',     color: 'var(--red)' },
-  today:    { label: 'Today',       color: 'var(--amber)' },
-  tomorrow: { label: 'Tomorrow',    color: 'var(--green)' },
-  next7:    { label: 'Next 7 Days', color: 'var(--blue)' },
-  future:   { label: 'Future',      color: 'var(--text-muted)' },
-};
+type Bucket = 'overdue' | 'today' | 'tomorrow' | 'day2' | 'next7';
 
 interface Props {
   board: Record<Bucket, Task[]>;
   todayStr: string;
   tomorrowStr: string;
+  day2Str: string;
+  day2Label: string;
 }
 
-function DroppableColumn({ bucket, tasks, isDragging }: { bucket: Bucket; tasks: Task[]; isDragging: boolean }) {
-  const { label, color } = bucketMeta[bucket];
+function DroppableColumn({ bucket, label, tasks, color, isDragging, onSelectTask }: { bucket: Bucket; label: string; tasks: Task[]; color: string; isDragging: boolean; onSelectTask?: (task: Task) => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: bucket });
 
   return (
@@ -63,13 +57,13 @@ function DroppableColumn({ bucket, tasks, isDragging }: { bucket: Bucket; tasks:
       {tasks.length === 0 ? (
         <div className="text-xs py-4 text-center" style={{ color: 'var(--text-faint)' }}>—</div>
       ) : (
-        tasks.map((task) => <DraggableCard key={task.id} task={task} bucket={bucket} />)
+        tasks.map((task) => <DraggableCard key={task.id} task={task} bucket={bucket} onSelect={onSelectTask} />)
       )}
     </div>
   );
 }
 
-function DraggableCard({ task, bucket }: { task: Task; bucket: Bucket }) {
+function DraggableCard({ task, bucket, onSelect }: { task: Task; bucket: Bucket; onSelect?: (task: Task) => void }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: task.id,
     data: { task, sourceBucket: bucket },
@@ -77,27 +71,37 @@ function DraggableCard({ task, bucket }: { task: Task; bucket: Bucket }) {
 
   return (
     <div ref={setNodeRef} style={{ opacity: isDragging ? 0.3 : 1, cursor: 'grab' }} {...listeners} {...attributes}>
-      <TaskCard task={task} bucket={bucket} />
+      <TaskCard task={task} bucket={bucket} onSelect={onSelect} />
     </div>
   );
 }
 
-export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }: Props) {
+export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr, day2Str, day2Label }: Props) {
   const router = useRouter();
   const [board, setBoard] = useState(initialBoard);
   const [activeTask, setActiveTask] = useState<{ task: Task; sourceBucket: Bucket } | null>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
-  // Sync local board state when server sends fresh data (after router.refresh())
   useEffect(() => { setBoard(initialBoard); }, [initialBoard]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+
+  const bucketMeta: Record<Bucket, { label: string; color: string; date: string | null }> = {
+    overdue:  { label: 'Overdue',       color: 'var(--red)',        date: null },
+    today:    { label: 'Today',         color: 'var(--amber)',      date: todayStr },
+    tomorrow: { label: 'Tomorrow',      color: 'var(--green)',      date: tomorrowStr },
+    day2:     { label: day2Label,        color: 'var(--cyan)',       date: day2Str },
+    next7:    { label: 'Next 7 Days',   color: 'var(--blue)',       date: null },
+  };
 
   function bucketToDate(bucket: Bucket): string | null {
     if (bucket === 'overdue') return null;
     if (bucket === 'today') return todayStr;
     if (bucket === 'tomorrow') return tomorrowStr;
+    if (bucket === 'day2') return day2Str;
+    // next7: drop into +4 days from today
     const base = new Date(todayStr + 'T12:00:00');
-    base.setDate(base.getDate() + (bucket === 'next7' ? 3 : 10));
+    base.setDate(base.getDate() + 4);
     return base.toISOString().slice(0, 10);
   }
 
@@ -115,7 +119,6 @@ export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }
     const newDate = bucketToDate(target);
     if (!newDate) return;
 
-    // Optimistic update
     setBoard((prev) => {
       const next = { ...prev };
       next[sourceBucket] = prev[sourceBucket].filter((t) => t.id !== task.id);
@@ -123,31 +126,25 @@ export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }
       return next;
     });
 
-    const payload = { id: task.id, due_date: newDate };
-    console.log('[TaskBoard] PATCH payload', payload);
     try {
       const res = await fetch('/api/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ id: task.id, due_date: newDate }),
       });
-      const data = await res.json().catch(() => null);
-      console.log('[TaskBoard] PATCH response', res.status, data);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${JSON.stringify(data)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       router.refresh();
     } catch (err) {
       console.error('[TaskBoard] move failed, reverting', err);
-      setBoard(initialBoard); // revert
+      setBoard(initialBoard);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialBoard, todayStr, tomorrowStr]);
+  }, [initialBoard, todayStr, tomorrowStr, day2Str]);
 
-  // Hide overdue column when empty — no reason to show an empty column
-  const buckets: Bucket[] = (
-    board.overdue.length > 0
-      ? ['overdue', 'today', 'tomorrow', 'next7', 'future']
-      : ['today', 'tomorrow', 'next7', 'future']
-  ) as Bucket[];
+  // Build visible buckets — hide overdue when empty
+  const buckets: Bucket[] = board.overdue.length > 0
+    ? ['overdue', 'today', 'tomorrow', 'day2', 'next7']
+    : ['today', 'tomorrow', 'day2', 'next7'];
 
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -155,10 +152,22 @@ export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }
         <div className="flex justify-end mb-4">
           <TaskQuickAdd />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-4">
-          {buckets.map((bucket) => (
-            <DroppableColumn key={bucket} bucket={bucket} tasks={board[bucket]} isDragging={activeTask !== null} />
-          ))}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" style={board.overdue.length > 0 ? { gridTemplateColumns: undefined } : undefined}>
+          <style>{board.overdue.length > 0 ? `@media (min-width: 1280px) { .task-grid { grid-template-columns: repeat(5, 1fr) !important; } }` : ''}</style>
+          {buckets.map((bucket) => {
+            const meta = bucketMeta[bucket];
+            return (
+              <DroppableColumn
+                key={bucket}
+                bucket={bucket}
+                label={meta.label}
+                tasks={board[bucket]}
+                color={meta.color}
+                isDragging={activeTask !== null}
+                onSelectTask={setSelectedTask}
+              />
+            );
+          })}
         </div>
       </div>
       <DragOverlay>
@@ -168,6 +177,9 @@ export default function TaskBoard({ board: initialBoard, todayStr, tomorrowStr }
           </div>
         )}
       </DragOverlay>
+      {selectedTask && (
+        <TaskDetailPanel task={selectedTask} onClose={() => setSelectedTask(null)} />
+      )}
     </DndContext>
   );
 }

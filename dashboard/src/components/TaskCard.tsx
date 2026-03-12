@@ -5,12 +5,13 @@ import { useRouter } from 'next/navigation';
 import { Task } from '@/lib/db';
 import MoveTaskDate from './MoveTaskDate';
 
-type Bucket = 'overdue' | 'today' | 'tomorrow' | 'next7' | 'future' | 'done';
+type Bucket = 'overdue' | 'today' | 'tomorrow' | 'day2' | 'next7' | 'future' | 'done';
 
 const bucketAccent: Record<Bucket, string> = {
   overdue:  'var(--red)',
   today:    'var(--amber)',
   tomorrow: 'var(--green)',
+  day2:     'var(--cyan)',
   next7:    'var(--blue)',
   future:   'var(--text-faint)',
   done:     'var(--text-faint)',
@@ -29,9 +30,10 @@ function fmtDate(d: Date | string | null | undefined): string {
 interface Props {
   task: Task;
   bucket: Bucket;
+  onSelect?: (task: Task) => void;
 }
 
-export default function TaskCard({ task, bucket }: Props) {
+export default function TaskCard({ task, bucket, onSelect }: Props) {
   const router = useRouter();
   const accent = bucketAccent[bucket];
   const initialDone = bucket === 'done';
@@ -66,6 +68,12 @@ export default function TaskCard({ task, bucket }: Props) {
         border: '1px solid var(--border)',
         borderLeft: `2px solid ${accent}`,
         opacity: done ? 0.45 : 1,
+        cursor: onSelect ? 'pointer' : undefined,
+      }}
+      onClick={(e) => {
+        // Don't trigger detail panel if clicking checkbox or date picker
+        if ((e.target as HTMLElement).closest('button')) return;
+        onSelect?.(task);
       }}
     >
       <div className="flex items-start gap-2">

@@ -134,6 +134,15 @@ export type SessionState =
       action: 'update' | 'delete';
       pendingIntent: Intent;
       candidates: CalendarEvent[];
+    }
+  | {
+      // Reminder reschedule: waiting for user to send new time
+      state: 'reminder_reschedule';
+      reminderId: string;
+    }
+  | {
+      // ROI: user wants to set the generated top 3 as MIT/P1/P2
+      state: 'roi_set_focus';
     };
 
 // ---------------------------------------------------------------------------

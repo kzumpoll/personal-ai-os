@@ -1,20 +1,19 @@
-import { addDays, parseISO } from 'date-fns';
+import { addDays, parseISO, format } from 'date-fns';
 import pool, { Task, logDbError } from '@/lib/db';
 import { getLocalToday } from '@/lib/date';
 import TaskBoard from '@/components/TaskBoard';
 import PageHeader from '@/components/PageHeader';
 
-const emptyBoard = { overdue: [] as Task[], today: [] as Task[], tomorrow: [] as Task[], next7: [] as Task[], future: [] as Task[] };
+export type Bucket = 'overdue' | 'today' | 'tomorrow' | 'day2' | 'next7';
+
+const emptyBoard: Record<Bucket, Task[]> = { overdue: [], today: [], tomorrow: [], day2: [], next7: [] };
 
 async function getBoard() {
-  // Use getLocalToday() (USER_TZ-aware) so buckets use Bali local date, not UTC.
-  // Plain new Date() on Vercel returns UTC, causing tasks to appear in wrong bucket
-  // across midnight (e.g. March 10 tasks staying in "Today" when it is already March 11).
   const today = getLocalToday();
-  const tomorrow = addDays(parseISO(today + 'T12:00:00'), 1).toISOString().slice(0, 10);
-  const next7End = addDays(parseISO(today + 'T12:00:00'), 7).toISOString().slice(0, 10);
-
-  console.log(`[getBoard] query params  today=${today}  tomorrow=${tomorrow}  next7End=${next7End}`);
+  const base = parseISO(today + 'T12:00:00');
+  const tomorrow = addDays(base, 1).toISOString().slice(0, 10);
+  const day2 = addDays(base, 2).toISOString().slice(0, 10);
+  const next7End = addDays(base, 7).toISOString().slice(0, 10);
 
   try {
     const { rows } = await pool.query<Task & { bucket: string }>(
@@ -23,24 +22,21 @@ async function getBoard() {
            WHEN due_date < $1 THEN 'overdue'
            WHEN due_date = $1 THEN 'today'
            WHEN due_date = $2 THEN 'tomorrow'
-           WHEN due_date <= $3 THEN 'next7'
-           ELSE 'future'
+           WHEN due_date = $3 THEN 'day2'
+           WHEN due_date <= $4 THEN 'next7'
+           ELSE 'next7'
          END as bucket
        FROM tasks
        WHERE status = 'todo'
        ORDER BY due_date ASC NULLS LAST`,
-      [today, tomorrow, next7End]
-    );
-    console.log(
-      `[getBoard] ${rows.length} tasks returned: ` +
-      rows.map((r) => `${r.id.slice(0, 8)} due=${JSON.stringify(r.due_date)} bucket=${r.bucket}`).join(' | ')
+      [today, tomorrow, day2, next7End]
     );
     return {
       overdue:  rows.filter((r) => r.bucket === 'overdue'),
       today:    rows.filter((r) => r.bucket === 'today'),
       tomorrow: rows.filter((r) => r.bucket === 'tomorrow'),
+      day2:     rows.filter((r) => r.bucket === 'day2'),
       next7:    rows.filter((r) => r.bucket === 'next7'),
-      future:   rows.filter((r) => r.bucket === 'future'),
     };
   } catch (err) {
     logDbError('tasks', err);
@@ -61,7 +57,10 @@ export default async function TasksPage() {
   const total = Object.values(board).reduce((s, arr) => s + arr.length, 0);
   const overdueCount = board.overdue.length;
   const todayStr = getLocalToday();
-  const tomorrowStr = addDays(parseISO(todayStr + 'T12:00:00'), 1).toISOString().slice(0, 10);
+  const base = parseISO(todayStr + 'T12:00:00');
+  const tomorrowStr = addDays(base, 1).toISOString().slice(0, 10);
+  const day2Str = addDays(base, 2).toISOString().slice(0, 10);
+  const day2Label = format(addDays(base, 2), 'EEEE'); // e.g. "Saturday"
 
   return (
     <div>
@@ -71,7 +70,7 @@ export default async function TasksPage() {
         badge={overdueCount > 0 ? `${overdueCount} overdue` : undefined}
         badgeColor="red"
       />
-      <TaskBoard board={board} todayStr={todayStr} tomorrowStr={tomorrowStr} />
+      <TaskBoard board={board} todayStr={todayStr} tomorrowStr={tomorrowStr} day2Str={day2Str} day2Label={day2Label} />
     </div>
   );
 }

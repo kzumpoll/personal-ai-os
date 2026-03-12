@@ -7,6 +7,8 @@ import { getClaudeCodeStatus, setClaudeCodeStatus } from './db/queries/claude_st
 import { syncTasksToNotion } from './services/notion';
 import { editImage, isImageEditConfigured } from './services/imageEdit';
 import { startScheduler } from './services/scheduler';
+import { startReminderScheduler } from './services/reminderScheduler';
+import { startDailyRoiScheduler } from './services/dailyRoi';
 import { cleanupExpiredSessions } from './telegram/session';
 
 const app = express();
@@ -254,6 +256,12 @@ async function main() {
 
   // Recurring scheduler — Friday 8am check-in
   startScheduler(bot);
+
+  // Reminder delivery scheduler — polls every minute
+  startReminderScheduler(bot);
+
+  // Daily 8AM ROI message (Mon-Sat)
+  startDailyRoiScheduler(bot);
 
   console.log('=== startup complete ===\n');
 

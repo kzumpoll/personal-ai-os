@@ -6,6 +6,14 @@ import TaskCard from '@/components/TaskCard';
 import PageHeader from '@/components/PageHeader';
 import DayNav from '@/components/DayNav';
 
+/** Returns current quarter string like "Q1 2026" for a given YYYY-MM-DD date. */
+function getCurrentQuarter(dateStr: string): string {
+  const m = parseInt(dateStr.slice(5, 7), 10);
+  const y = dateStr.slice(0, 4);
+  const q = Math.ceil(m / 3);
+  return `Q${q} ${y}`;
+}
+
 interface ScheduleBlock {
   time: string;
   title: string;
@@ -64,7 +72,12 @@ async function getData(dateParam?: string) {
       ),
       pool.query<DayPlan>('SELECT * FROM day_plans WHERE plan_date = $1', [today]),
       getEventsForDate(today),
-      pool.query<Goal>(`SELECT * FROM goals WHERE status = 'active' ORDER BY created_at DESC LIMIT 5`),
+      pool.query<Goal>(
+        `SELECT * FROM goals WHERE status = 'active'
+         AND (quarter IS NULL OR quarter = $1)
+         ORDER BY created_at DESC LIMIT 5`,
+        [getCurrentQuarter(today)]
+      ),
     ]);
 
     return {
@@ -413,7 +426,7 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
       {/* Active goals — alignment block at bottom */}
       {goals.length > 0 && (
         <section className="mt-8 pt-6" style={{ borderTop: '1px solid var(--border)' }}>
-          <SectionLabel color="var(--violet)">Active Goals &nbsp;{goals.length}</SectionLabel>
+          <SectionLabel color="var(--violet)">Active Goals — {getCurrentQuarter(todayStr)} &nbsp;{goals.length}</SectionLabel>
           <div className="flex flex-col gap-2">
             {goals.map((g) => (
               <div

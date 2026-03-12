@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { format } from 'date-fns';
-import { Search, ExternalLink, X } from 'lucide-react';
+import { Search, ExternalLink, X, ChevronRight, Trash2 } from 'lucide-react';
 import { Resource } from '@/lib/db';
 
 const typeColors: Record<string, { color: string; bg: string }> = {
@@ -123,9 +124,13 @@ function AddResourceForm({ onAdded }: AddFormProps) {
 }
 
 export default function ResourceList({ resources: initial }: Props) {
+  const router = useRouter();
   const [resources, setResources] = useState<Resource[]>(initial);
   const [query, setQuery] = useState('');
   const [activeType, setActiveType] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Collect unique types from the data
   const types = useMemo(() => {
@@ -242,62 +247,109 @@ export default function ResourceList({ resources: initial }: Props) {
             const hasUrl = r.content_or_url && isUrl(r.content_or_url);
             let dateStr = '';
             try { dateStr = format(new Date(toDateStr(r.created_at)), 'MMM d'); } catch { /* skip */ }
+            const isExpanded = expandedId === r.id;
+            const isConfirming = confirmDeleteId === r.id;
 
             return (
               <div
                 key={r.id}
-                className="rounded-lg p-4"
+                className="group rounded-lg"
                 style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
-                    {hasUrl ? (
-                      <a
-                        href={r.content_or_url!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 group"
-                      >
-                        <span
-                          className="text-sm font-medium transition-colors"
-                          style={{ color: 'var(--text)' }}
-                        >
-                          {r.title}
-                        </span>
-                        <ExternalLink size={11} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
-                      </a>
-                    ) : (
-                      <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{r.title}</p>
-                    )}
-
-                    {r.content_or_url && !hasUrl && (
-                      <p className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
-                        {r.content_or_url}
-                      </p>
-                    )}
-                    {hasUrl && (
-                      <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
-                        {r.content_or_url}
-                      </p>
-                    )}
+                <div
+                  className="flex items-start justify-between gap-3 p-4"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                >
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <ChevronRight
+                      size={14}
+                      className="shrink-0 mt-0.5 transition-transform"
+                      style={{ color: 'var(--text-faint)', transform: isExpanded ? 'rotate(90deg)' : 'none' }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      {hasUrl ? (
+                        <a href={r.content_or_url!} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-sm font-medium" style={{ color: 'var(--text)' }}>{r.title}</span>
+                          <ExternalLink size={11} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
+                        </a>
+                      ) : (
+                        <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{r.title}</p>
+                      )}
+                      {!isExpanded && r.content_or_url && !hasUrl && (
+                        <p className="text-xs mt-1 line-clamp-1" style={{ color: 'var(--text-muted)' }}>{r.content_or_url}</p>
+                      )}
+                      {!isExpanded && hasUrl && (
+                        <p className="text-xs mt-0.5 truncate" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{r.content_or_url}</p>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="flex flex-col items-end gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     {r.type && typeCfg && (
-                      <span
-                        className="text-xs px-2 py-0.5 rounded-full capitalize"
-                        style={{ color: typeCfg.color, background: typeCfg.bg, fontWeight: 500 }}
-                      >
-                        {r.type}
-                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full capitalize" style={{ color: typeCfg.color, background: typeCfg.bg, fontWeight: 500 }}>{r.type}</span>
                     )}
-                    {dateStr && (
-                      <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
-                        {dateStr}
-                      </span>
+                    {dateStr && <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{dateStr}</span>}
+
+                    {/* Delete button — visible on hover */}
+                    {isConfirming ? (
+                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={async () => {
+                            setDeletingId(r.id);
+                            try {
+                              const res = await fetch(`/api/resources/${r.id}`, { method: 'DELETE' });
+                              if (res.ok) {
+                                setResources((prev) => prev.filter((x) => x.id !== r.id));
+                                router.refresh();
+                              }
+                            } catch { /* silent */ }
+                            finally { setDeletingId(null); setConfirmDeleteId(null); }
+                          }}
+                          disabled={deletingId === r.id}
+                          className="text-xs px-2 py-0.5 rounded"
+                          style={{ background: 'rgba(239,68,68,0.15)', color: 'var(--red)', cursor: 'pointer' }}
+                        >{deletingId === r.id ? '...' : 'Delete'}</button>
+                        <button onClick={() => setConfirmDeleteId(null)} className="text-xs" style={{ color: 'var(--text-faint)', cursor: 'pointer' }}>Cancel</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(r.id); }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 2 }}
+                        aria-label="Delete resource"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     )}
                   </div>
                 </div>
+
+                {/* Expanded detail */}
+                {isExpanded && (
+                  <div className="px-4 pb-4 pt-0 ml-6" style={{ borderTop: '1px solid var(--border)' }}>
+                    <div className="pt-3 flex flex-col gap-2">
+                      {r.content_or_url && (
+                        <div>
+                          <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>
+                            {hasUrl ? 'URL' : 'Content'}
+                          </label>
+                          {hasUrl ? (
+                            <a href={r.content_or_url} target="_blank" rel="noopener noreferrer" className="text-xs break-all" style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}>{r.content_or_url}</a>
+                          ) : (
+                            <p className="text-sm leading-relaxed" style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{r.content_or_url}</p>
+                          )}
+                        </div>
+                      )}
+                      {r.type && (
+                        <div>
+                          <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Type</label>
+                          <p className="text-xs capitalize" style={{ color: 'var(--text-muted)' }}>{r.type}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}

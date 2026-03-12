@@ -54,6 +54,7 @@ export interface Task {
   id: string;
   title: string;
   notes: string | null;
+  description: string | null;
   status: string;
   due_date: string | null;
   project_id: string | null;
@@ -76,6 +77,7 @@ export interface Idea {
   id: string;
   content: string;
   actionability: string | null;
+  potential: string | null;
   next_step: string | null;
   linked_project_id: string | null;
   linked_task_id: string | null;
@@ -85,6 +87,7 @@ export interface Idea {
 
 export interface Thought {
   id: string;
+  title: string | null;
   content: string;
   created_at: string;
 }

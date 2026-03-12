@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useTheme } from './ThemeProvider';
 import {
   CalendarDays,
+  Calendar,
   CheckSquare,
   LayoutDashboard,
   Zap,
@@ -18,6 +19,7 @@ import {
   Moon,
   Search,
   BarChart2,
+  DollarSign,
 } from 'lucide-react';
 import ClaudeCodeIndicator from './ClaudeCodeIndicator';
 
@@ -27,6 +29,7 @@ const navGroups = [
     items: [
       { href: '/',               label: 'Today',          Icon: CalendarDays },
       { href: '/tasks',          label: 'Tasks',          Icon: CheckSquare },
+      { href: '/calendar',       label: 'Calendar',       Icon: Calendar },
       { href: '/command-center', label: 'Command Center', Icon: LayoutDashboard },
     ],
   },
@@ -46,6 +49,7 @@ const navGroups = [
       { href: '/projects',   label: 'Projects',   Icon: FolderKanban },
       { href: '/goals',      label: 'Goals',      Icon: Target },
       { href: '/resources',  label: 'Resources',  Icon: Bookmark },
+      { href: '/finances',   label: 'Finances',   Icon: DollarSign },
       { href: '/search',     label: 'Search',     Icon: Search },
     ],
   },

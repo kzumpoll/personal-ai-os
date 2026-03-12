@@ -28,6 +28,8 @@ export type IntentType =
   | 'weekly_review'
   | 'set_idea_next_step'
   | 'promote_idea_to_project'
+  | 'update_task_description'
+  | 'create_reminder'
   | 'within_review'
   | 'undo_last'
   | 'unknown';
@@ -274,6 +276,26 @@ export interface CalendarDeleteEventIntent {
   };
 }
 
+export interface UpdateTaskDescriptionIntent {
+  intent: 'update_task_description';
+  data: {
+    task_id?: string;
+    task_title?: string;
+    description: string;
+  };
+}
+
+export interface CreateReminderIntent {
+  intent: 'create_reminder';
+  data: {
+    title: string;
+    body: string;
+    scheduled_at: string;        // ISO 8601 datetime
+    recipient_name?: string;
+    suggested_message?: string;
+  };
+}
+
 export interface WithinReviewIntent {
   intent: 'within_review';
   data: Record<string, never>;
@@ -314,6 +336,8 @@ export type Intent =
   | WeeklyReviewIntent
   | SetIdeaNextStepIntent
   | PromoteIdeaToProjectIntent
+  | UpdateTaskDescriptionIntent
+  | CreateReminderIntent
   | WithinReviewIntent
   | UndoLastIntent
   | UnknownIntent;

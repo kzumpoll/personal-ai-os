@@ -4,6 +4,7 @@ export interface Task {
   id: string;
   title: string;
   notes: string | null;
+  description: string | null;
   status: string;
   due_date: string | null;
   project_id: string | null;
@@ -121,7 +122,7 @@ export async function updateTaskDueDate(id: string, due_date: string): Promise<T
 
 export async function updateTask(
   id: string,
-  data: Partial<Pick<Task, 'title' | 'notes' | 'status' | 'due_date' | 'project_id'>>
+  data: Partial<Pick<Task, 'title' | 'notes' | 'description' | 'status' | 'due_date' | 'project_id'>>
 ): Promise<Task | null> {
   const fields = Object.keys(data)
     .map((k, i) => `${k} = $${i + 2}`)
