@@ -516,6 +516,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
   addToHistory(chatId, 'user', text);
   const session = getSession(chatId);
+  console.log('[bot] handleText chat:', chatId, 'session:', session.state, 'text:', text.slice(0, 80));
   const lower = text.toLowerCase().trim();
 
   // --- Pending capture confirmation (idea/thought/win/goal/resource) ---
@@ -705,13 +706,24 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       console.log('[bot] debrief_awaiting_confirmation cancelled/denied');
       await reply('Got it, debrief not saved.');
     } else {
-      // Treat as a correction to the draft
+      // Treat as a correction to the draft — ALWAYS stay in this session state
       console.log('[bot] debrief_awaiting_confirmation — applying correction:', text.slice(0, 120));
       const currentData = (session.pendingIntent.intent === 'save_debrief' ? session.pendingIntent.data : {}) as Record<string, unknown>;
       const tasks = session.tasks;
-      const correctionResult = await applyDebriefCorrection(currentData, text, tasks);
+
+      let correctionResult: Awaited<ReturnType<typeof applyDebriefCorrection>>;
+      try {
+        correctionResult = await applyDebriefCorrection(currentData, text, tasks);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error('[bot] debrief correction threw:', errMsg);
+        // Stay in session — do NOT fall through to generic handler
+        await reply(`Correction failed (${errMsg.slice(0, 60)}). Try rephrasing, or say "confirm" to save as-is.`);
+        return;
+      }
 
       if (!correctionResult) {
+        // Stay in session
         await reply("Something went wrong applying that correction. Try rephrasing, or say \"confirm\" to save as-is.");
         return;
       }

@@ -240,6 +240,7 @@ async function main() {
   // Telegram bot — always use polling (Railway provides a persistent process)
   await bot.launch();
   console.log('  bot:  polling started ✓');
+  console.log('  sessions: reset (in-memory — cleared on deploy)');
 
   // Recurring scheduler — Friday 8am check-in
   startScheduler(bot);
