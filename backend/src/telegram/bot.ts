@@ -515,7 +515,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   };
 
   addToHistory(chatId, 'user', text);
-  const session = getSession(chatId);
+  const session = await getSession(chatId);
   console.log('[bot] handleText chat:', chatId, 'session:', session.state, 'text:', text.slice(0, 80));
   const lower = text.toLowerCase().trim();
 
@@ -523,7 +523,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   if (session.state === 'pending_capture') {
     if (isAffirmative(lower)) {
       const intent = captureToIntent(session.captureType, session.captureContent);
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] pending_capture confirmed → executing', intent.intent);
       try {
         const result = await executeIntent(intent);
@@ -533,11 +533,11 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         await reply("Couldn't save that — please try again.");
       }
     } else if (isNegative(lower)) {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Got it, not saved.');
     } else {
       // Unrelated message — discard pending capture and handle as fresh message
-      clearSession(chatId);
+      await clearSession(chatId);
       return await handleText(chatId, text, rawReply);
     }
     return;
@@ -547,14 +547,14 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   if (session.state === 'pending_remove_event') {
     const { planDate, candidates } = session;
     if (isNegative(lower) || lower === 'cancel') {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Got it, nothing removed.');
       return;
     }
     const num = extractPositionalNumber(text);
     if (num !== null && num >= 1 && num <= candidates.length) {
       const ev = candidates[num - 1];
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] day plan: removing event', ev.id, ev.title, 'for', planDate);
       const { agenda, diff } = await regeneratePlanFor(planDate, undefined, { id: ev.id, title: ev.title, start: ev.start });
       await reply(formatPlanReply(`"${ev.title}" removed from plan.`, diff, agenda));
@@ -572,14 +572,14 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   if (session.state === 'pending_calendar_disambiguation') {
     const { action, pendingIntent, candidates } = session;
     if (isNegative(lower) || lower === 'cancel') {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Got it, no calendar change made.');
       return;
     }
     const num = extractPositionalNumber(text);
     if (num !== null && num >= 1 && num <= candidates.length) {
       const chosen = candidates[num - 1];
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] calendar disambiguation: chose', chosen.id, chosen.title, 'for', action);
 
       // Patch the pending intent with the resolved event_id
@@ -612,7 +612,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   if (session.state === 'pending_confirmation') {
     if (isAffirmative(lower)) {
       const intent = session.pendingIntent;
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] pending_confirmation confirmed → executing', intent.intent);
       if (intent.intent === 'daily_debrief') {
         await startDebrief(chatId, reply);
@@ -626,11 +626,11 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         }
       }
     } else if (isNegative(lower)) {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Got it, no action taken.');
     } else {
       // Unrelated message — discard and re-route
-      clearSession(chatId);
+      await clearSession(chatId);
       return await handleText(chatId, text, rawReply);
     }
     return;
@@ -640,7 +640,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   if (session.state === 'debrief_awaiting_input') {
     // Allow explicit cancel before trying to interpret the message as debrief content
     if (isNegative(lower) || lower === 'cancel' || lower === 'exit' || lower === 'quit') {
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] debrief_awaiting_input cancelled by user');
       await reply('Debrief cancelled.');
       return;
@@ -676,13 +676,13 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         },
       } as Intent;
       const summary = await confirmDebriefSummary(fallbackIntent, debriefTasks);
-      setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: fallbackIntent, tasks: debriefTasks });
+      await setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: fallbackIntent, tasks: debriefTasks });
       await reply('I could only partially interpret that. Here\'s what I got — correct anything that\'s wrong:\n\n' + summary);
       return;
     }
 
     const summary = await confirmDebriefSummary(intent, debriefTasks);
-    setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: intent, tasks: debriefTasks });
+    await setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: intent, tasks: debriefTasks });
     await reply(summary);
     return;
   }
@@ -693,16 +693,16 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       console.log('[bot] debrief_awaiting_confirmation confirmed → executing save_debrief');
       try {
         const result = await executeIntent(session.pendingIntent);
-        clearSession(chatId);
+        await clearSession(chatId);
         await reply(result.message);
       } catch (err) {
-        clearSession(chatId);
+        await clearSession(chatId);
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[bot] debrief confirm error:', msg);
         await reply('Something went wrong saving the debrief. Please try /debrief again.');
       }
     } else if (isNegative(lower)) {
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] debrief_awaiting_confirmation cancelled/denied');
       await reply('Got it, debrief not saved.');
     } else {
@@ -730,7 +730,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
       const { intent: updatedIntent, clarification } = correctionResult;
       const newSummary = await confirmDebriefSummary(updatedIntent, tasks);
-      setSession(chatId, {
+      await setSession(chatId, {
         state: 'debrief_awaiting_confirmation',
         debriefDate: session.debriefDate,
         planDate: session.planDate,
@@ -750,7 +750,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   // --- Check-in: awaiting freeform input ---
   if (session.state === 'checkin_awaiting_input') {
     if (isNegative(lower) || lower === 'cancel') {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Check-in cancelled.');
       return;
     }
@@ -758,7 +758,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     console.log('[bot] checkin_awaiting_input → parsing reply for', weekLabel);
     const checkinData = await interpretCheckinReply(text);
     const summary = formatCheckinSummary(checkinData, weekLabel);
-    setSession(chatId, {
+    await setSession(chatId, {
       state: 'checkin_awaiting_confirmation',
       weekLabel,
       periodStart,
@@ -786,23 +786,23 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
             captured_at: new Date().toISOString(),
           },
         });
-        clearSession(chatId);
+        await clearSession(chatId);
         await reply(`Check-in saved ✓ Good work reflecting on your week.${checkinData.suggested_tasks?.length ? `\n\nSuggested tasks to consider:\n${checkinData.suggested_tasks.map((t) => `• ${t}`).join('\n')}` : ''}`);
       } catch (err) {
-        clearSession(chatId);
+        await clearSession(chatId);
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[bot] checkin save error:', msg);
         await reply('Something went wrong saving the check-in. Please try again.');
       }
     } else if (isNegative(lower)) {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Check-in discarded.');
     } else {
       // Correction: re-parse with the original reply + correction appended
       const corrected = await interpretCheckinReply(`${text}`);
       const merged = { ...checkinData, ...Object.fromEntries(Object.entries(corrected).filter(([, v]) => v !== null && !(Array.isArray(v) && v.length === 0))) };
       const newSummary = formatCheckinSummary(merged as typeof checkinData, weekLabel);
-      setSession(chatId, {
+      await setSession(chatId, {
         state: 'checkin_awaiting_confirmation',
         weekLabel,
         periodStart,
@@ -817,12 +817,12 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   // --- Image: awaiting prompt (editing or understanding) ---
   if (session.state === 'image_awaiting_prompt') {
     if (isNegative(lower) || lower === 'cancel') {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Cancelled.');
       return;
     }
     const { imageBuffer, imageMimeType } = session;
-    clearSession(chatId);
+    await clearSession(chatId);
 
     const imgIntent = classifyImageIntent(text);
     console.log('[bot] image_awaiting_prompt: classified as', imgIntent);
@@ -841,7 +841,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
           return;
         }
         if (interpreted.confirm_needed) {
-          setSession(chatId, { state: 'pending_confirmation', pendingIntent: interpreted.intent });
+          await setSession(chatId, { state: 'pending_confirmation', pendingIntent: interpreted.intent });
           await reply(`${interpreted.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
           return;
         }
@@ -890,7 +890,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     const { proposal, stats } = session;
 
     if (isAffirmative(lower)) {
-      clearSession(chatId);
+      await clearSession(chatId);
       console.log('[bot] within_review confirmed → executing proposal');
       await reply('Updating Within Notion...');
       await executeWithinProposal(proposal, reply);
@@ -898,7 +898,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     }
 
     if (isNegative(lower) || lower === 'cancel') {
-      clearSession(chatId);
+      await clearSession(chatId);
       await reply('Within update cancelled — nothing changed.');
       return;
     }
@@ -906,7 +906,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     // Treat as correction
     console.log('[bot] within_review — applying correction:', text.slice(0, 80));
     const updatedProposal = await applyWithinCorrection(proposal, text);
-    setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal: updatedProposal, stats });
+    await setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal: updatedProposal, stats });
     await reply(`Updated ✓\n\n${formatWithinProposal(updatedProposal, stats)}`);
     return;
   }
@@ -1017,7 +1017,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         await reply('[CAL v2] This looks like a calendar event. Try: "add ' + (intent.content?.slice(0, 40) ?? 'event') + ' to my calendar"');
         return;
       }
-      setSession(chatId, {
+      await setSession(chatId, {
         state: 'pending_capture',
         captureType: intent.capture_type,
         captureContent: intent.content,
@@ -1036,7 +1036,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       }
 
       if (intent.confirm_needed) {
-        setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
+        await setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
         await reply(`${intent.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
         return;
       }
@@ -1141,7 +1141,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
           (appIntent.intent === 'calendar_update_event' || appIntent.intent === 'calendar_delete_event')
         ) {
           const candidates = (result.data as { disambiguation: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }> }).disambiguation;
-          setSession(chatId, {
+          await setSession(chatId, {
             state: 'pending_calendar_disambiguation',
             action: appIntent.intent === 'calendar_update_event' ? 'update' : 'delete',
             pendingIntent: appIntent,
@@ -1199,7 +1199,7 @@ async function startDebrief(chatId: number, reply: (msg: string) => Promise<unkn
   // Store full task objects (with IDs) so debrief reply parser can resolve positional refs
   const sessionTasks = tasks.map((t) => ({ id: t.id, title: t.title, due_date: t.due_date }));
 
-  setSession(chatId, {
+  await setSession(chatId, {
     state: 'debrief_awaiting_input',
     debriefDate,
     planDate,
@@ -1307,7 +1307,7 @@ async function startWithinReview(chatId: number, reply: (msg: string) => Promise
     due_soon: withinResult.due_soon.length,
   };
 
-  setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal, stats });
+  await setSession(chatId, { state: 'within_review_awaiting_confirmation', proposal, stats });
   await reply(formatWithinProposal(proposal, stats));
 }
 
@@ -1444,7 +1444,7 @@ bot.on('photo', async (ctx) => {
         }
 
         if (intent.confirm_needed) {
-          setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
+          await setSession(chatId, { state: 'pending_confirmation', pendingIntent: appIntent });
           await ctx.reply(`${intent.user_facing_summary}\n\nReply "yes" to confirm or "no" to cancel.`);
           return;
         }
@@ -1482,11 +1482,11 @@ bot.on('photo', async (ctx) => {
     } else {
       // No caption — ask what they want
       if (isImageEditConfigured()) {
-        setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
+        await setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
         await ctx.reply('Got the image. What would you like me to do with it?\n\nI can edit it (e.g. "make the background white") or extract info (e.g. "add these events to my calendar").');
       } else {
         // No image editing available, but can still understand
-        setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
+        await setSession(chatId, { state: 'image_awaiting_prompt', imageBuffer, imageMimeType: mimeType });
         await ctx.reply('Got the image. What would you like me to do with it?\n\nFor example: "add these to my calendar", "turn this into tasks", or "what does this say?"');
       }
     }
@@ -1649,8 +1649,8 @@ async function handleReviewCommand(chatId: number, reply: (msg: string) => Promi
 }
 
 // Wire up scheduler events — set session when Friday check-in is sent
-schedulerEvents.on('checkin_prompt_sent', (event: CheckinPromptEvent) => {
-  setSession(event.chatId, {
+schedulerEvents.on('checkin_prompt_sent', async (event: CheckinPromptEvent) => {
+  await setSession(event.chatId, {
     state: 'checkin_awaiting_input',
     weekLabel: event.weekLabel,
     periodStart: event.periodStart,
@@ -1673,7 +1673,7 @@ bot.command('checkin', async (ctx) => {
   const periodStart = format(subDays(now, 6), 'yyyy-MM-dd');
   const weekLabel = `${format(subDays(now, 6), 'MMM dd')} – ${format(now, 'MMM dd')}`;
 
-  setSession(chatId, {
+  await setSession(chatId, {
     state: 'checkin_awaiting_input',
     weekLabel,
     periodStart,

@@ -7,6 +7,7 @@ import { getClaudeCodeStatus, setClaudeCodeStatus } from './db/queries/claude_st
 import { syncTasksToNotion } from './services/notion';
 import { editImage, isImageEditConfigured } from './services/imageEdit';
 import { startScheduler } from './services/scheduler';
+import { cleanupExpiredSessions } from './telegram/session';
 
 const app = express();
 // Accept up to 20 MB JSON payloads (for base64-encoded image edits)
@@ -237,10 +238,19 @@ async function main() {
   await new Promise<void>((resolve) => app.listen(PORT, resolve));
   console.log(`  http: listening on port ${PORT} ✓`);
 
+  // Clean up expired sessions and log active ones
+  const expiredCount = await cleanupExpiredSessions();
+  const { rows: activeSessions } = await pool.query<{ chat_id: string; state: string }>(`SELECT chat_id, state FROM chat_sessions WHERE state != 'idle'`);
+  console.log(`  sessions: ${activeSessions.length} active, ${expiredCount} expired cleaned up`);
+  if (activeSessions.length > 0) {
+    for (const s of activeSessions) {
+      console.log(`    chat ${s.chat_id}: ${s.state}`);
+    }
+  }
+
   // Telegram bot — always use polling (Railway provides a persistent process)
   await bot.launch();
   console.log('  bot:  polling started ✓');
-  console.log('  sessions: reset (in-memory — cleared on deploy)');
 
   // Recurring scheduler — Friday 8am check-in
   startScheduler(bot);

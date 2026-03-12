@@ -1,10 +1,12 @@
 import { Intent, CaptureType } from '../ai/intents';
 import { CheckinData, WithinProposal } from '../ai/claude';
 import { CalendarEvent } from '../services/calendar';
+import pool from '../db/client';
 
 // ---------------------------------------------------------------------------
 // Task list reference — tracks the last numbered list shown per chat so that
 // positional references ("mark 6 done") resolve against the correct list.
+// These are ephemeral display state — in-memory only.
 // ---------------------------------------------------------------------------
 
 export interface TaskListRef {
@@ -25,6 +27,7 @@ export function getLastTaskList(chatId: number): TaskListRef | null {
 // ---------------------------------------------------------------------------
 // Idea list reference — tracks the last numbered idea list shown per chat so
 // that positional references ("set next step for idea 2 to X") resolve correctly.
+// These are ephemeral display state — in-memory only.
 // ---------------------------------------------------------------------------
 
 export interface IdeaListRef {
@@ -99,6 +102,7 @@ export type SessionState =
     }
   | {
       // User sent a photo without a caption — waiting for the edit prompt
+      // NOTE: this state contains a Buffer and is NOT persisted to Postgres
       state: 'image_awaiting_prompt';
       imageBuffer: Buffer;
       imageMimeType: string;
@@ -132,16 +136,112 @@ export type SessionState =
       candidates: CalendarEvent[];
     };
 
-const sessions = new Map<number, SessionState>();
+// ---------------------------------------------------------------------------
+// Session storage — database-backed with in-memory cache
+//
+// All states except image_awaiting_prompt are persisted to Postgres.
+// image_awaiting_prompt contains a Buffer and stays in-memory only.
+// Sessions expire after 24 hours (cleaned up on read).
+// ---------------------------------------------------------------------------
 
-export function getSession(chatId: number): SessionState {
-  return sessions.get(chatId) ?? { state: 'idle' };
+// States that cannot be persisted (contain non-serializable data like Buffer)
+const NON_PERSISTABLE_STATES = new Set(['image_awaiting_prompt']);
+
+// In-memory cache — used for fast reads and for non-persistable states
+const memoryCache = new Map<number, SessionState>();
+
+/**
+ * Get session state for a chat. Checks in-memory cache first, then Postgres.
+ * Returns idle if no session exists or if the session has expired.
+ */
+export async function getSession(chatId: number): Promise<SessionState> {
+  // Check in-memory cache first
+  const cached = memoryCache.get(chatId);
+  if (cached && cached.state !== 'idle') return cached;
+
+  // Check Postgres
+  try {
+    const { rows } = await pool.query<{ state: string; data: Record<string, unknown>; expires_at: string }>(
+      `SELECT state, data, expires_at FROM chat_sessions WHERE chat_id = $1`,
+      [chatId]
+    );
+
+    if (rows.length === 0 || rows[0].state === 'idle') return { state: 'idle' };
+
+    // Check expiry
+    if (new Date(rows[0].expires_at) < new Date()) {
+      console.log('[session] expired session for chat', chatId, '— state was:', rows[0].state);
+      await pool.query(`DELETE FROM chat_sessions WHERE chat_id = $1`, [chatId]);
+      memoryCache.delete(chatId);
+      return { state: 'idle' };
+    }
+
+    const session = { state: rows[0].state, ...rows[0].data } as unknown as SessionState;
+    memoryCache.set(chatId, session);
+    return session;
+  } catch (err) {
+    console.error('[session] getSession DB error for chat', chatId, ':', err instanceof Error ? err.message : err);
+    // Fall back to memory cache or idle
+    return cached ?? { state: 'idle' };
+  }
 }
 
-export function setSession(chatId: number, session: SessionState): void {
-  sessions.set(chatId, session);
+/**
+ * Synchronous version for use in code paths that can't be async.
+ * Returns the in-memory cached state only.
+ */
+export function getSessionSync(chatId: number): SessionState {
+  return memoryCache.get(chatId) ?? { state: 'idle' };
 }
 
-export function clearSession(chatId: number): void {
-  sessions.set(chatId, { state: 'idle' });
+/**
+ * Set session state for a chat. Updates both in-memory cache and Postgres.
+ * Non-persistable states (image_awaiting_prompt) are stored in-memory only.
+ */
+export async function setSession(chatId: number, session: SessionState): Promise<void> {
+  memoryCache.set(chatId, session);
+
+  if (NON_PERSISTABLE_STATES.has(session.state)) return;
+
+  const { state, ...data } = session;
+  try {
+    await pool.query(
+      `INSERT INTO chat_sessions (chat_id, state, data, updated_at, expires_at)
+       VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '24 hours')
+       ON CONFLICT (chat_id)
+       DO UPDATE SET state = $2, data = $3, updated_at = NOW(), expires_at = NOW() + INTERVAL '24 hours'`,
+      [chatId, state, JSON.stringify(data)]
+    );
+  } catch (err) {
+    console.error('[session] setSession DB error for chat', chatId, ':', err instanceof Error ? err.message : err);
+    // In-memory cache is still set, so the session works for this process lifetime
+  }
+}
+
+/**
+ * Clear session state for a chat. Sets to idle in both memory and Postgres.
+ */
+export async function clearSession(chatId: number): Promise<void> {
+  memoryCache.set(chatId, { state: 'idle' });
+
+  try {
+    await pool.query(`DELETE FROM chat_sessions WHERE chat_id = $1`, [chatId]);
+  } catch (err) {
+    console.error('[session] clearSession DB error for chat', chatId, ':', err instanceof Error ? err.message : err);
+  }
+}
+
+/**
+ * Clean up expired sessions. Called periodically or at startup.
+ */
+export async function cleanupExpiredSessions(): Promise<number> {
+  try {
+    const { rowCount } = await pool.query(
+      `DELETE FROM chat_sessions WHERE expires_at < NOW()`
+    );
+    return rowCount ?? 0;
+  } catch (err) {
+    console.error('[session] cleanup error:', err instanceof Error ? err.message : err);
+    return 0;
+  }
 }
