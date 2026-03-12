@@ -25,7 +25,7 @@ import {
   isWithinConfigured,
   discoverWithinUserIds,
 } from '../services/withinNotion';
-import { captureToIntent } from '../ai/intents';
+import { captureToIntent, type Intent } from '../ai/intents';
 import { executeIntent, fmtDate } from '../mutations/executor';
 import {
   getSession,
@@ -661,13 +661,22 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     console.log('[bot] debrief intent parsed — intent:', intent.intent);
     console.log('[bot] debrief intent data:', JSON.stringify(intent.intent === 'save_debrief' ? intent.data : '[unknown intent — recovery failed]'));
 
-    // If parseDebriefResponse could not recover a valid save_debrief, do not store
-    // unknown in session and ask user to retry rather than confirming garbage.
+    // interpretDebriefReply now always returns save_debrief (even partial).
+    // If somehow it doesn't, show what we got and let the user correct.
     if (intent.intent !== 'save_debrief') {
-      clearSession(chatId);
-      await reply(
-        "Sorry, I had trouble parsing that debrief. Please try again — send /debrief and reply with the same content."
-      );
+      console.warn('[bot] debrief interpretation returned non-save_debrief:', intent.intent);
+      // Wrap the raw text as a minimal debrief so user can correct
+      const fallbackIntent: Intent = {
+        intent: 'save_debrief',
+        data: {
+          entry_date: planDate,
+          debrief_date: debriefDate,
+          open_journal: text.slice(0, 2000),
+        },
+      } as Intent;
+      const summary = await confirmDebriefSummary(fallbackIntent, debriefTasks);
+      setSession(chatId, { state: 'debrief_awaiting_confirmation', debriefDate, planDate, pendingIntent: fallbackIntent, tasks: debriefTasks });
+      await reply('I could only partially interpret that. Here\'s what I got — correct anything that\'s wrong:\n\n' + summary);
       return;
     }
 

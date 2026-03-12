@@ -332,7 +332,17 @@ export function parseDebriefResponse(raw: string): { intent: Intent; repaired: b
 // Debrief system prompt — raw JSON only, no prose, no fences
 // ---------------------------------------------------------------------------
 
-const DEBRIEF_SYSTEM_PROMPT = `You are a debrief data extractor. Your ONLY job is to parse the user's debrief message and return a single JSON object.
+const DEBRIEF_SYSTEM_PROMPT = `You are a debrief data extractor. Your ONLY job is to interpret the user's debrief message and return a single JSON object.
+
+The input may be a messy voice transcript with filler words, corrections, digressions, and long reflections. This is normal. Your job is to extract the structured intent from the mess.
+
+Handling messy input:
+- Voice transcripts often contain: "um", "like", "actually no", "wait", corrections mid-sentence
+- "move 2, no leave 2" → the correction ("no leave 2") wins — do NOT move task 2
+- "3 done, 5 to saturday, 7 to saturday" → parse each action even without explicit labels
+- Long rambling paragraphs about reflections → summarize into open_journal
+- If the user mentions accomplishments → extract as wins
+- Partial information is fine — extract what you can, omit what you can't
 
 CRITICAL OUTPUT RULES — these are absolute and must never be violated:
 - Output RAW JSON only. Nothing else.
@@ -340,7 +350,8 @@ CRITICAL OUTPUT RULES — these are absolute and must never be violated:
 - No prose, notes, explanations, or commentary before or after the JSON.
 - Do NOT wrap in {"intent":"unknown",...} — if uncertain about a field, omit it.
 - Your entire response must start with { and end with }.
-- Never add a "Notes:" section or any text after the closing brace.`;
+- Never add a "Notes:" section or any text after the closing brace.
+- ALWAYS return intent "save_debrief" even if only some fields could be extracted.`;
 
 export async function interpretDebriefReply(
   userReply: string,
@@ -359,25 +370,30 @@ export async function interpretDebriefReply(
 
   const prompt = `You are parsing a daily debrief reply. The user is debriefing ${debriefDate} and planning ${planDate}.
 
+IMPORTANT: The input may be a messy voice transcript — rambling, corrections, filler words. This is normal. Extract what you can.
+
 Task reference list (use FULL UUIDs from this list, never 8-char prefixes):
 ${taskListStr}
 
 Extract from their message:
-- wake_time (HH:MM for ${planDate}; "7am"→"07:00", "6:30"→"06:30")
+- wake_time (HH:MM for ${planDate}; "7am"→"07:00", "6:30"→"06:30", "around 8"→"08:00")
 - work_start (HH:MM, optional)
-- MIT (Most Important Task for ${planDate})
+- MIT (Most Important Task for ${planDate} — may be described loosely, match to a task or use verbatim)
 - P1, P2 (next 2 priority tasks for ${planDate})
-- open_journal (reflections, notes, thoughts from ${debriefDate})
-- wins (list of wins from ${debriefDate})
-- task_completions (full UUIDs of tasks marked done — match by position or name)
+- open_journal (reflections, notes, thoughts from ${debriefDate} — summarize rambling into coherent paragraphs)
+- wins (list of wins/accomplishments from ${debriefDate} — even if mentioned in passing)
+- task_completions (full UUIDs of tasks marked done — match by position number, name, or description)
 - task_due_date_changes (tasks to reschedule — use full UUIDs, new date YYYY-MM-DD)
-- task_deletions (tasks to permanently delete — use full UUIDs; use when user says "delete" next to a task number)
+- task_deletions (tasks to permanently delete — use full UUIDs)
 
 Task action rules:
-- "3. done" or "complete 3" → task_completions
-- "5. to mar 11" or "move 5 to march 11" → task_due_date_changes with date "${planDate.slice(0,4)}-03-11"
-- "9. delete" or "delete 9" → task_deletions (do NOT add notes or ask for clarification — just add to task_deletions)
-- Resolve relative dates using today = ${planDate}
+- "3. done" or "complete 3" or "finished 3" → task_completions
+- "5. to saturday" or "move 5 to march 14" → task_due_date_changes
+- "move 2, no leave 2" → the LAST instruction wins (leave 2 alone)
+- "9. delete" or "delete 9" → task_deletions
+- Numbers refer to the position in the task list above
+- "tomorrow" → ${planDate}; "saturday" / "sunday" / weekday names → resolve from ${planDate}
+- Resolve all relative dates using today = ${planDate}
 
 Additional context: ${contextStr}
 
@@ -403,11 +419,13 @@ Return this exact JSON shape (omit fields that are not mentioned; do not include
   }
 }
 
+ALWAYS return intent "save_debrief" with whatever fields you can extract. Never return "unknown".
+
 User reply: ${userReply}`;
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
+    max_tokens: 2048,
     system: DEBRIEF_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -416,18 +434,58 @@ User reply: ${userReply}`;
 
   const result = parseDebriefResponse(text);
 
-  if (!result) {
-    console.error('[interpretDebriefReply] PARSE FAILURE — could not extract save_debrief');
-    console.error('[interpretDebriefReply] raw model output:', JSON.stringify(text));
-    return { intent: 'unknown', data: { message: text } };
+  if (result) {
+    if (result.repaired) {
+      console.warn('[interpretDebriefReply] repaired malformed output (recovered save_debrief from wrapper/fences)');
+    }
+    return result.intent;
   }
 
-  if (result.repaired) {
-    console.warn('[interpretDebriefReply] repaired malformed output (recovered save_debrief from wrapper/fences)');
-    console.warn('[interpretDebriefReply] raw (first 300 chars):', text.slice(0, 300));
+  // First attempt failed to produce valid JSON. Retry with a recovery prompt
+  // that gets the raw output and asks Claude to fix it.
+  console.warn('[interpretDebriefReply] first attempt parse failure — retrying with recovery prompt');
+  console.warn('[interpretDebriefReply] raw output (first 500 chars):', text.slice(0, 500));
+
+  try {
+    const recoveryResponse = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: `You are a JSON repair tool. The previous attempt to extract debrief data produced invalid output. Fix it.
+
+Output ONLY a valid JSON object starting with { and ending with }.
+The JSON must have "intent": "save_debrief" and a "data" object.
+Extract whatever structured data you can from the original input. Partial data is fine.
+Never return intent "unknown". Always return "save_debrief".`,
+      messages: [
+        { role: 'user', content: `Original user input:\n${userReply}\n\nFailed model output:\n${text}\n\nTask list:\n${taskListStr}\n\nDebrief date: ${debriefDate}\nPlan date: ${planDate}\n\nReturn a valid save_debrief JSON.` },
+      ],
+    });
+
+    const retryText = recoveryResponse.content[0].type === 'text' ? recoveryResponse.content[0].text : '';
+    const retryResult = parseDebriefResponse(retryText);
+
+    if (retryResult) {
+      console.log('[interpretDebriefReply] recovery succeeded');
+      return retryResult.intent;
+    }
+
+    // Even recovery failed — build a minimal save_debrief from whatever we have
+    console.error('[interpretDebriefReply] recovery also failed — building minimal intent');
+    console.error('[interpretDebriefReply] retry raw:', retryText.slice(0, 300));
+  } catch (retryErr) {
+    console.error('[interpretDebriefReply] recovery call failed:', retryErr instanceof Error ? retryErr.message : retryErr);
   }
 
-  return result.intent;
+  // Last resort: return a minimal save_debrief so the user at least gets to see
+  // a confirmation screen they can correct, rather than a hard failure.
+  return {
+    intent: 'save_debrief',
+    data: {
+      entry_date: planDate,
+      debrief_date: debriefDate,
+      open_journal: userReply.slice(0, 2000),
+    },
+  } as Intent;
 }
 
 
@@ -446,46 +504,67 @@ export async function confirmDebriefSummary(
   intent: Intent,
   debriefTasks: Array<{ id: string; title: string; due_date?: string | null }> = []
 ): Promise<string> {
-  if (intent.intent !== 'save_debrief') return 'Could not parse debrief.';
+  if (intent.intent !== 'save_debrief') return 'Could not interpret debrief — please try again or correct below.';
 
   const d = intent.data;
   const debriefStr = fmtShortDate(d.debrief_date ?? d.entry_date);
   const planStr = fmtShortDate(d.entry_date);
   const lines: string[] = [
-    `Debrief: ${debriefStr} | Plan: ${planStr}`,
+    `Proposed Debrief Summary`,
+    `Debrief: ${debriefStr} → Plan: ${planStr}`,
     '─────────────────────',
   ];
 
-  if (d.wake_time) lines.push(`Wake: ${d.wake_time}`);
-  if (d.mit) lines.push(`MIT: ${d.mit}`);
-  if (d.p1) lines.push(`P1: ${d.p1}`);
-  if (d.p2) lines.push(`P2: ${d.p2}`);
-  if (d.open_journal) lines.push(`Journal: ${d.open_journal}`);
-  if (d.wins?.length) lines.push(`Wins: ${d.wins.join(', ')}`);
+  if (d.wake_time) lines.push(`\nWake: ${d.wake_time}`);
 
-  if (d.task_completions?.length) {
-    const names = d.task_completions.map((id) => {
-      const t = debriefTasks.find((t) => t.id === id);
-      return t ? `"${t.title}"` : `(ref: ${String(id).slice(0, 8)}…)`;
-    });
-    lines.push(`Mark done: ${names.join(', ')}`);
+  if (d.mit) {
+    const taskNum = debriefTasks.findIndex((t) => t.id === d.mit || t.title === d.mit);
+    lines.push(`\nMIT:\n${taskNum >= 0 ? `Task ${taskNum + 1} — ` : ''}${d.mit}`);
+    if (d.mit_start_action) lines.push(`→ ${d.mit_start_action}`);
+  }
+  if (d.p1) {
+    const taskNum = debriefTasks.findIndex((t) => t.id === d.p1 || t.title === d.p1);
+    lines.push(`\nP1:\n${taskNum >= 0 ? `Task ${taskNum + 1} — ` : ''}${d.p1}`);
+    if (d.p1_start_action) lines.push(`→ ${d.p1_start_action}`);
+  }
+  if (d.p2) {
+    const taskNum = debriefTasks.findIndex((t) => t.id === d.p2 || t.title === d.p2);
+    lines.push(`\nP2:\n${taskNum >= 0 ? `Task ${taskNum + 1} — ` : ''}${d.p2}`);
+    if (d.p2_start_action) lines.push(`→ ${d.p2_start_action}`);
   }
 
+  if (d.open_journal) lines.push(`\nJournal:\n${d.open_journal}`);
+  if (d.wins?.length) lines.push(`\nWins:\n${d.wins.map((w) => `- ${w}`).join('\n')}`);
+
+  // Task changes section
+  const taskChanges: string[] = [];
+
   if (d.task_due_date_changes?.length) {
-    const changes = d.task_due_date_changes.map((c) => {
-      const t = debriefTasks.find((t) => t.id === c.id);
-      const name = t ? `"${t.title}"` : `(ref: ${String(c.id).slice(0, 8)}…)`;
-      return `${name} → ${fmtShortDate(c.due_date)}`;
-    });
-    lines.push(`Reschedule: ${changes.join(', ')}`);
+    for (const c of d.task_due_date_changes) {
+      const idx = debriefTasks.findIndex((t) => t.id === c.id);
+      const name = idx >= 0 ? `${idx + 1}` : String(c.id).slice(0, 8);
+      taskChanges.push(`${name} → ${fmtShortDate(c.due_date)}`);
+    }
+  }
+
+  if (d.task_completions?.length) {
+    for (const id of d.task_completions) {
+      const idx = debriefTasks.findIndex((t) => t.id === id);
+      const name = idx >= 0 ? `${idx + 1}` : String(id).slice(0, 8);
+      taskChanges.push(`${name} → Completed`);
+    }
   }
 
   if (d.task_deletions?.length) {
-    const names = d.task_deletions.map((id) => {
-      const t = debriefTasks.find((t) => t.id === id);
-      return t ? `"${t.title}"` : `(ref: ${String(id).slice(0, 8)}…)`;
-    });
-    lines.push(`Delete: ${names.join(', ')}`);
+    for (const id of d.task_deletions) {
+      const idx = debriefTasks.findIndex((t) => t.id === id);
+      const name = idx >= 0 ? `${idx + 1}` : String(id).slice(0, 8);
+      taskChanges.push(`${name} → Delete`);
+    }
+  }
+
+  if (taskChanges.length > 0) {
+    lines.push(`\nTask changes:\n${taskChanges.join('\n')}`);
   }
 
   // Show which overdue tasks will be auto-moved to the plan date
@@ -503,7 +582,7 @@ export async function confirmDebriefSummary(
     );
   }
 
-  lines.push('\nReply "yes" to confirm or correct me.');
+  lines.push('\nReply "confirm" or correct anything above.');
   return lines.join('\n');
 }
 
