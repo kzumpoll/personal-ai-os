@@ -1137,8 +1137,21 @@ Message: ${userMessage}`;
 
     return parsed;
   } catch {
-    console.error('[interpretUserIntent] parse error — raw:', text.slice(0, 200));
-    return { type: 'casual', reply: "Sorry, I lost my train of thought — could you say that again?" };
+    console.error('[interpretUserIntent] JSON parse failure — raw:', text.slice(0, 300));
+
+    // Tier 1: If the LLM produced readable prose (not broken JSON), use it as an answer
+    const trimmed = text.trim();
+    if (trimmed.length > 5 && trimmed.length < 2000 && !/^\s*[{[]/.test(trimmed)) {
+      console.log('[interpretUserIntent] recovery: using raw text as answer');
+      return { type: 'answer', text: trimmed };
+    }
+
+    // Tier 2: Return a clarification prompt
+    console.log('[interpretUserIntent] recovery: returning clarification');
+    return {
+      type: 'clarify',
+      question: "I didn't quite catch that — could you rephrase? I can help with your calendar, tasks, day plan, ideas, and more.",
+    };
   }
 }
 

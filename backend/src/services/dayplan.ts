@@ -20,6 +20,18 @@ function isPadel(title: string): boolean {
   return title.toLowerCase().includes('padel');
 }
 
+// Shared emoji map — used by formatAgendaForBot and querySchedule
+const TYPE_EMOJI: Record<string, string> = {
+  wake: '☀️',
+  event: '📅',
+  mit: '🎯',
+  p1: '▶️',
+  p2: '▷',
+  task: '•',
+  break: '🍽️',
+  travel: '🚗',
+};
+
 function parseHHMM(t: string): number {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + (m || 0);
@@ -253,16 +265,7 @@ export function formatAgendaForBot(
   const parts = planDate.split('-').map(Number);
   const dateLabel = parts.length === 3 ? `${months[parts[1] - 1]} ${String(parts[2]).padStart(2, '0')}` : planDate;
 
-  const typeEmoji: Record<string, string> = {
-    wake: '☀️',
-    event: '📅',
-    mit: '🎯',
-    p1: '▶️',
-    p2: '▷',
-    task: '•',
-    break: '🍽️',
-    travel: '🚗',
-  };
+  const typeEmoji = TYPE_EMOJI;
 
   const isDone = (type: string): boolean => {
     if (type === 'mit') return completions?.mit_done ?? false;
@@ -343,4 +346,167 @@ export function diffDayPlans(
 
   if (changes.length === 0) return null;
   return changes.map((c) => `• ${c}`).join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic day plan querying — answer simple schedule questions without LLM
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a flexible time string into minutes-since-midnight.
+ * Accepts: "10:30", "14:00", "2pm", "2:30pm", "11am", "11:30am", bare hours >= 7.
+ * Returns null for ambiguous bare hours 1–6 (no am/pm).
+ */
+export function parseFlexibleTime(s: string): number | null {
+  const t = s.trim().toLowerCase();
+
+  // HH:MM with am/pm: "2:30pm", "11:30am"
+  const ampmMinMatch = t.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/);
+  if (ampmMinMatch) {
+    let h = parseInt(ampmMinMatch[1], 10);
+    const m = parseInt(ampmMinMatch[2], 10);
+    if (ampmMinMatch[3] === 'pm' && h < 12) h += 12;
+    if (ampmMinMatch[3] === 'am' && h === 12) h = 0;
+    return h * 60 + m;
+  }
+
+  // Bare hour with am/pm: "2pm", "11am"
+  const ampmMatch = t.match(/^(\d{1,2})\s*(am|pm)$/);
+  if (ampmMatch) {
+    let h = parseInt(ampmMatch[1], 10);
+    if (ampmMatch[2] === 'pm' && h < 12) h += 12;
+    if (ampmMatch[2] === 'am' && h === 12) h = 0;
+    return h * 60;
+  }
+
+  // HH:MM 24h: "14:00", "10:30"
+  const hhmmMatch = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (hhmmMatch) {
+    const h = parseInt(hhmmMatch[1], 10);
+    const m = parseInt(hhmmMatch[2], 10);
+    return h * 60 + m;
+  }
+
+  // Bare hour: only accept >= 7 (unambiguous daytime)
+  const bareMatch = t.match(/^(\d{1,2})$/);
+  if (bareMatch) {
+    const h = parseInt(bareMatch[1], 10);
+    if (h >= 7 && h <= 23) return h * 60;
+    return null; // ambiguous 1–6
+  }
+
+  return null;
+}
+
+function formatBlock(block: ScheduleBlock): string {
+  const emoji = TYPE_EMOJI[block.type] ?? '•';
+  const dur = block.duration_min > 0 ? ` (${block.duration_min}min)` : '';
+  return `${block.time} ${emoji} ${block.title}${dur}`;
+}
+
+/**
+ * Answer a simple schedule query deterministically from the schedule blocks.
+ * Returns a formatted answer string, or null if the message is not a plan query.
+ */
+export function querySchedule(message: string, schedule: ScheduleBlock[]): string | null {
+  if (schedule.length === 0) return null;
+
+  const msg = message.trim().toLowerCase();
+
+  // --- Time range: "between X and Y" / "from X to Y" ---
+  const rangeMatch =
+    msg.match(/(?:and\s+)?(?:between|from)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+(?:and|to)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/) ??
+    msg.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*[-–]\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/);
+  if (rangeMatch) {
+    const startMin = parseFlexibleTime(rangeMatch[1]);
+    const endMin = parseFlexibleTime(rangeMatch[2]);
+    if (startMin === null || endMin === null) return null; // ambiguous time → let LLM handle
+    return formatRangeAnswer(schedule, startMin, endMin);
+  }
+
+  // --- Relative: "after lunch", "what's after lunch", "after padel" ---
+  const afterMatch = msg.match(/(?:what(?:'?s| is)\s+)?after\s+(.+?)[\s?.!]*$/);
+  if (afterMatch) {
+    const target = afterMatch[1].trim();
+    const block = findBlockByTitle(schedule, target);
+    if (!block) return null;
+    const afterMin = parseHHMM(block.time) + block.duration_min;
+    const after = schedule.filter((b) => parseHHMM(b.time) >= afterMin);
+    if (after.length === 0) return `Nothing scheduled after ${block.title}.`;
+    return `After ${block.title}:\n${after.map(formatBlock).join('\n')}`;
+  }
+
+  // --- Relative: "before padel", "what's before padel" ---
+  const beforeMatch = msg.match(/(?:what(?:'?s| is)\s+)?before\s+(.+?)[\s?.!]*$/);
+  if (beforeMatch) {
+    const target = beforeMatch[1].trim();
+    const block = findBlockByTitle(schedule, target);
+    if (!block) return null;
+    const blockStart = parseHHMM(block.time);
+    const before = schedule.filter((b) => parseHHMM(b.time) + b.duration_min <= blockStart);
+    if (before.length === 0) return `Nothing scheduled before ${block.title}.`;
+    return `Before ${block.title}:\n${before.map(formatBlock).join('\n')}`;
+  }
+
+  // --- "what's next" / "next up" ---
+  if (/(?:what(?:'?s| is)\s+next|next\s+up)\b/.test(msg)) {
+    const nowMin = getCurrentMinutes();
+    const next = schedule.find((b) => parseHHMM(b.time) >= nowMin && b.type !== 'wake');
+    if (!next) return 'Nothing left on today\'s plan.';
+    return `Next up:\n${formatBlock(next)}`;
+  }
+
+  return null;
+}
+
+function findBlockByTitle(schedule: ScheduleBlock[], query: string): ScheduleBlock | null {
+  const q = query.toLowerCase();
+  return schedule.find((b) => b.title.toLowerCase().includes(q)) ?? null;
+}
+
+function formatRangeAnswer(schedule: ScheduleBlock[], startMin: number, endMin: number): string {
+  const blocks = schedule.filter((b) => {
+    const bStart = parseHHMM(b.time);
+    const bEnd = bStart + b.duration_min;
+    // Block overlaps with the query range
+    return bEnd > startMin && bStart < endMin;
+  });
+
+  const startStr = toHHMM(startMin);
+  const endStr = toHHMM(endMin);
+
+  if (blocks.length === 0) {
+    const freeMin = endMin - startMin;
+    return `Nothing scheduled between ${startStr} and ${endStr} — ${freeMin}min free.`;
+  }
+
+  // Calculate free time in range
+  let scheduledMin = 0;
+  for (const b of blocks) {
+    const bStart = Math.max(parseHHMM(b.time), startMin);
+    const bEnd = Math.min(parseHHMM(b.time) + b.duration_min, endMin);
+    if (bEnd > bStart) scheduledMin += bEnd - bStart;
+  }
+  const freeMin = (endMin - startMin) - scheduledMin;
+
+  const lines = [`Between ${startStr} and ${endStr}:`];
+  for (const b of blocks) lines.push(formatBlock(b));
+  if (freeMin > 0) lines.push(`(${freeMin}min free)`);
+  return lines.join('\n');
+}
+
+function getCurrentMinutes(): number {
+  const tz = process.env.USER_TZ;
+  if (tz) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+      }).formatToParts(new Date());
+      const h = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+      const m = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+      return h * 60 + m;
+    } catch { /* fall through */ }
+  }
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
 }

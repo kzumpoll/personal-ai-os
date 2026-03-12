@@ -941,6 +941,19 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     console.error('[bot] plan/calendar fetch error:', planErr instanceof Error ? planErr.message : planErr);
   }
 
+  // Deterministic plan query — skip LLM if we can answer from schedule blocks
+  if (plan?.schedule && plan.schedule.length > 0) {
+    const { querySchedule } = await import('../services/dayplan');
+    const directAnswer = querySchedule(text, plan.schedule);
+    if (directAnswer) {
+      console.log('[bot] deterministic plan query — answered without LLM');
+      addToHistory(chatId, 'user', text);
+      addToHistory(chatId, 'bot', directAnswer);
+      await reply(directAnswer);
+      return;
+    }
+  }
+
   console.log('[bot] interpreting intent for chat', chatId);
   const intent = await interpretUserIntent(
     text, ctx, getHistory(chatId),

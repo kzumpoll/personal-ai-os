@@ -9,7 +9,8 @@
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
     "selftest": "tsx src/selftest.ts",
-    "test": "vitest run src/ai/debrief-parser.test.ts"
+    "test": "vitest run src/ai/debrief-parser.test.ts",
+    "test:all": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
