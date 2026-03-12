@@ -591,52 +591,138 @@ export async function confirmDebriefSummary(
 // ---------------------------------------------------------------------------
 
 /**
- * Apply a small correction to an already-parsed debrief draft.
+ * Apply a natural-language correction to an existing debrief draft.
  *
- * The user is in the confirmation step and says something like:
- *   "change the MIT to X"  /  "P1 should be Y"  /  "remove that win"
+ * Uses semantic interpretation — the user does not need exact phrasing.
+ * Supports fuzzy matching for wins, journal sections, task references, etc.
  *
- * This function asks Claude to merge the correction into the current data
- * and return the updated JSON.
+ * Returns: { intent, clarification? }
+ * - intent: the updated save_debrief (always returned, even if correction is partial)
+ * - clarification: optional question if the correction was ambiguous
  */
 export async function applyDebriefCorrection(
   currentData: Record<string, unknown>,
-  correction: string
-): Promise<Intent | null> {
-  const prompt = `You are updating a daily debrief draft based on a user correction.
+  correction: string,
+  debriefTasks: Array<{ id: string; title: string; due_date: string | null }> = []
+): Promise<{ intent: Intent; clarification?: string } | null> {
+  const taskListStr = debriefTasks.length
+    ? debriefTasks.map((t, i) => `${i + 1}. [${t.id}] ${t.title}${t.due_date ? ` (due: ${t.due_date})` : ''}`).join('\n')
+    : '';
+
+  const prompt = `You are editing a daily debrief draft based on a natural-language correction from the user.
 
 Current debrief draft (JSON):
 ${JSON.stringify(currentData, null, 2)}
 
+${taskListStr ? `Task reference list:\n${taskListStr}\n` : ''}
 User correction: "${correction}"
 
-Apply the correction and return the COMPLETE updated debrief as a single JSON object with this exact shape:
+Your job: interpret what the user wants changed and apply it to the draft.
+
+━━━ How to interpret corrections ━━━
+
+The user may say things like:
+- "remove the win about padel" → find the win that mentions padel (fuzzy match) and remove it
+- "remove the win about energy" → find the win most related to energy, remove it
+- "remove the win of - Played a padel match and - Had energy throughout the whole day" → remove BOTH wins
+- "merge these two wins" / "combine the first two wins" → merge them into one
+- "shorten the journal part about X" → find the section mentioning X, make it more concise
+- "remove the reflection about Y" → remove that part from open_journal
+- "change P1 to task 17" → look up task 17 in the task list, set p1 to its title
+- "task 3 should stay tomorrow" → undo any reschedule for task 3
+- "remove task 13 from completed" → remove that UUID from task_completions
+- "add 'finished the design' to wins" → append to wins array
+- "change wake time to 8:00" → set wake_time to "08:00"
+- "MIT should be X" → update mit field
+- "add task 5 to completed" → add its UUID to task_completions
+- "move task 7 to monday" → add/update task_due_date_changes
+
+Fuzzy matching rules:
+- For wins: match by keywords/topic, not exact text. "the padel win" matches "Played a padel match"
+- For journal: match by topic/person mentioned. "the Oli section" matches a paragraph mentioning Oli
+- For tasks: match by position number OR name. "task 3" = position 3 in the task list
+- If the user mentions "and" between items, apply the correction to ALL mentioned items
+- If two items could match and it's ambiguous, include a "clarification" field
+
+━━━ Output format ━━━
+
+ALWAYS return the COMPLETE updated draft as JSON:
 {
   "intent": "save_debrief",
-  "data": {
-    ...all fields from current draft, with corrections applied...
-  }
+  "data": { ...all fields, with corrections applied... },
+  "clarification": null
+}
+
+If the correction is ambiguous, still apply your best guess AND include a clarification:
+{
+  "intent": "save_debrief",
+  "data": { ...best-guess update... },
+  "clarification": "Did you mean the win about energy or the one about productivity?"
 }
 
 Rules:
 - Keep all unchanged fields exactly as they are
 - Apply only what the user asked to change
-- "remove that win" / "delete win X" → remove it from the wins array
-- "change MIT to X" / "MIT should be X" → update the mit field
-- "P1 should be Y" → update the p1 field
-- "P2 is Z" → update the p2 field
+- ALWAYS return intent "save_debrief" — never "unknown"
 - Output RAW JSON only. No markdown. No prose. Start with { end with }.`;
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
-    system: DEBRIEF_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: prompt }],
-  });
+  let response: Awaited<ReturnType<typeof client.messages.create>>;
+  try {
+    response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: DEBRIEF_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+    });
+  } catch (err) {
+    console.error('[applyDebriefCorrection] API error:', err instanceof Error ? err.message : err);
+    return null;
+  }
 
   const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  console.log('[applyDebriefCorrection] raw response:', text.slice(0, 300));
+
+  // Try to extract clarification before parsing
+  let clarification: string | undefined;
+
   const result = parseDebriefResponse(text);
-  return result?.intent ?? null;
+  if (result) {
+    // Check if the response included a clarification field
+    try {
+      const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
+      const raw = JSON.parse(cleaned) as Record<string, unknown>;
+      if (raw.clarification && typeof raw.clarification === 'string') {
+        clarification = raw.clarification;
+      }
+    } catch { /* ignore — we already have the intent */ }
+    return { intent: result.intent, clarification };
+  }
+
+  // Parse failed — try recovery
+  console.warn('[applyDebriefCorrection] parse failed, attempting recovery');
+  try {
+    const recoveryResponse = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2048,
+      system: `Fix this into valid JSON. Output ONLY a JSON object starting with { ending with }. Must have "intent": "save_debrief" and a "data" object.`,
+      messages: [{ role: 'user', content: `Original draft:\n${JSON.stringify(currentData, null, 2)}\n\nCorrection: "${correction}"\n\nFailed output:\n${text}\n\nReturn the corrected save_debrief JSON.` }],
+    });
+    const retryText = recoveryResponse.content[0].type === 'text' ? recoveryResponse.content[0].text : '';
+    const retryResult = parseDebriefResponse(retryText);
+    if (retryResult) {
+      console.log('[applyDebriefCorrection] recovery succeeded');
+      return { intent: retryResult.intent };
+    }
+  } catch (retryErr) {
+    console.error('[applyDebriefCorrection] recovery failed:', retryErr instanceof Error ? retryErr.message : retryErr);
+  }
+
+  // Last resort: return original data unchanged with a clarification
+  console.warn('[applyDebriefCorrection] all attempts failed — returning original with clarification');
+  return {
+    intent: { intent: 'save_debrief', data: currentData } as unknown as Intent,
+    clarification: "I wasn't sure how to apply that. Could you try rephrasing? For example: \"remove the win about X\" or \"change P1 to Y\"",
+  };
 }
 
 // ---------------------------------------------------------------------------

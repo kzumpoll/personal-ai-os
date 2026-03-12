@@ -706,16 +706,17 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       await reply('Got it, debrief not saved.');
     } else {
       // Treat as a correction to the draft
-      console.log('[bot] debrief_awaiting_confirmation — applying correction:', text.slice(0, 80));
+      console.log('[bot] debrief_awaiting_confirmation — applying correction:', text.slice(0, 120));
       const currentData = (session.pendingIntent.intent === 'save_debrief' ? session.pendingIntent.data : {}) as Record<string, unknown>;
-      const updatedIntent = await applyDebriefCorrection(currentData, text);
+      const tasks = session.tasks;
+      const correctionResult = await applyDebriefCorrection(currentData, text, tasks);
 
-      if (!updatedIntent || updatedIntent.intent !== 'save_debrief') {
-        await reply("I couldn't apply that correction. Try again or say \"yes\" to save as-is, or \"no\" to cancel.");
+      if (!correctionResult) {
+        await reply("Something went wrong applying that correction. Try rephrasing, or say \"confirm\" to save as-is.");
         return;
       }
 
-      const tasks = session.tasks;
+      const { intent: updatedIntent, clarification } = correctionResult;
       const newSummary = await confirmDebriefSummary(updatedIntent, tasks);
       setSession(chatId, {
         state: 'debrief_awaiting_confirmation',
@@ -724,7 +725,12 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         pendingIntent: updatedIntent,
         tasks,
       });
-      await reply(`Updated ✓\n\n${newSummary}`);
+
+      if (clarification) {
+        await reply(`Updated (but I have a question):\n\n${newSummary}\n\n${clarification}`);
+      } else {
+        await reply(`Updated:\n\n${newSummary}`);
+      }
     }
     return;
   }
