@@ -292,7 +292,8 @@ export interface CreateReminderIntent {
     body: string;
     scheduled_at: string;        // ISO 8601 datetime
     recipient_name?: string;
-    suggested_message?: string;
+    suggested_message?: string;  // legacy — prefer draft_message
+    draft_message?: string;      // human, short, warm message to send
   };
 }
 

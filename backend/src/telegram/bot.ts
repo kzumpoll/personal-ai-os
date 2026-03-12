@@ -1,4 +1,4 @@
-import { Telegraf } from 'telegraf';
+import { Telegraf, Markup } from 'telegraf';
 import { Express } from 'express';
 import { buildContextPack, determineDebriefDates } from '../ai/context';
 import {
@@ -37,6 +37,10 @@ import {
   getLastIdeaList,
   extractPositionalNumber,
   extractPositionalNumbers,
+  setLastTaskRef,
+  setLastCalendarEventRef,
+  setLastReminderRef,
+  getEntityRefs,
 } from './session';
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
 import { editImage, isImageEditConfigured } from '../services/imageEdit';
@@ -955,11 +959,13 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   }
 
   console.log('[bot] interpreting intent for chat', chatId);
+  const refs = getEntityRefs(chatId);
   const intent = await interpretUserIntent(
     text, ctx, getHistory(chatId),
-    plan?.schedule ?? [], calendarEventsForPlan, planDate, getLocalTomorrow()
+    plan?.schedule ?? [], calendarEventsForPlan, planDate, getLocalTomorrow(),
+    refs
   );
-  console.log('[bot] [v2] interpreter result:', JSON.stringify(intent));
+  console.log('[bot] [v2] interpreter result:', intent.type, intent.type === 'app_action' ? intent.intent.intent : '');
 
   switch (intent.type) {
     case 'day_plan_mutation': {
@@ -1013,10 +1019,23 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       await reply(intent.reply);
       return;
 
-    case 'clarify':
+    case 'clarify': {
       console.log('[bot] [v2] dispatching: clarify');
-      await reply(intent.question);
+      if (intent.options && intent.options.length > 0) {
+        const buttons = intent.options.map((opt: string) =>
+          Markup.button.callback(opt, `clarify_opt:${opt.slice(0, 40)}`)
+        );
+        addToHistory(chatId, 'bot', intent.question);
+        await bot.telegram.sendMessage(
+          chatId,
+          intent.question,
+          Markup.inlineKeyboard([buttons])
+        );
+      } else {
+        await reply(intent.question);
+      }
       return;
+    }
 
     case 'capture': {
       console.log('[bot] [v2] dispatching: capture/', intent.capture_type);
@@ -1165,6 +1184,20 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         }
 
         await reply(result.message);
+
+        // Track entity references for follow-up resolution ("that one", "yeah that")
+        if (result.success && result.data && typeof result.data === 'object') {
+          const d = result.data as Record<string, unknown>;
+          if (d._entity === 'task' || appIntent.intent === 'create_task' || appIntent.intent === 'complete_task' || appIntent.intent === 'update_task_description') {
+            if (d.id && d.title) setLastTaskRef(chatId, { id: String(d.id), title: String(d.title) });
+          }
+          if (d._entity === 'reminder' || appIntent.intent === 'create_reminder') {
+            if (d.id && d.title) setLastReminderRef(chatId, { id: String(d.id), title: String(d.title), fire_at: String(d.scheduled_at ?? '') });
+          }
+          if (appIntent.intent === 'calendar_create_event' || appIntent.intent === 'calendar_update_event') {
+            if (d.id && d.title) setLastCalendarEventRef(chatId, { id: String(d.id), title: String(d.title), start: String(d.start ?? '') });
+          }
+        }
 
         // After calendar mutations, regenerate the day plan if affected date is today/tomorrow
         if (
@@ -1756,6 +1789,17 @@ bot.action(/^roi_set_focus$/, async (ctx) => {
 bot.action(/^roi_regenerate$/, async (ctx) => {
   await ctx.answerCbQuery('Regenerating...');
   await ctx.reply('Regenerating your top 3 ROI tasks... (coming soon)');
+});
+
+// Clarify option button — treat the selected option as a new message
+bot.action(/^clarify_opt:(.+)$/, async (ctx) => {
+  const option = ctx.match[1];
+  const chatId = ctx.chat?.id;
+  await ctx.answerCbQuery(option);
+  await ctx.editMessageReplyMarkup(undefined);
+  if (chatId) {
+    await handleText(chatId, option, (msg) => ctx.reply(msg));
+  }
 });
 
 export async function setupWebhook(app: Express, webhookUrl: string) {

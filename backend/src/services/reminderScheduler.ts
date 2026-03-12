@@ -15,9 +15,11 @@ import {
 } from '../db/queries/reminders';
 
 function formatReminderMessage(r: Reminder): string {
-  const lines = [`\u{1F514} Reminder: ${r.title}`, '', r.body];
+  const lines = [`\u{1F514} Reminder: ${r.title}`];
+  if (r.body && r.body !== r.title) lines.push('', r.body);
   if (r.recipient_name) lines.push('', `To: ${r.recipient_name}`);
-  if (r.suggested_message) lines.push('', `Suggested message:`, `"${r.suggested_message}"`);
+  const draft = r.draft_message ?? r.suggested_message;
+  if (draft) lines.push('', `Draft message:\n"${draft}"`);
   return lines.join('\n');
 }
 

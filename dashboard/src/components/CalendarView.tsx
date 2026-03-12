@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { format, parseISO, addDays, eachDayOfInterval, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns';
+import { format, parseISO, addDays, eachDayOfInterval } from 'date-fns';
 import { ChevronLeft, ChevronRight, X, Clock, Bell } from 'lucide-react';
 
 interface Reminder {
@@ -34,10 +34,20 @@ interface Props {
   rangeEnd: string;
 }
 
+const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 7:00 to 22:00
+const HOUR_HEIGHT = 56; // px per hour row
+
 function fmtTime(isoStr: string): string {
+  try { return format(new Date(isoStr), 'HH:mm'); } catch { return ''; }
+}
+
+function getHourMinute(isoStr: string): { hour: number; min: number } {
   try {
-    return format(new Date(isoStr), 'HH:mm');
-  } catch { return ''; }
+    const d = new Date(isoStr);
+    return { hour: d.getHours(), min: d.getMinutes() };
+  } catch {
+    return { hour: 0, min: 0 };
+  }
 }
 
 function statusColor(status: string): string {
@@ -47,32 +57,33 @@ function statusColor(status: string): string {
   return 'var(--cyan)';
 }
 
+// Always Running placeholder jobs
+const ALWAYS_RUNNING = [
+  { label: 'Reminder Poller', color: 'var(--green)' },
+  { label: 'Daily ROI', color: 'var(--cyan)' },
+  { label: 'Calendar Sync', color: 'var(--violet)' },
+];
+
 export default function CalendarView({ reminders, eventsMap, upcoming, today, view, rangeStart, rangeEnd }: Props) {
   const router = useRouter();
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
-  const [currentView, setCurrentView] = useState(view);
 
-  const base = parseISO(today + 'T12:00:00');
+  const rangeStartDate = parseISO(rangeStart + 'T12:00:00');
 
   function navigate(direction: number) {
-    const days = currentView === 'week' ? 7 : 30;
-    const newDate = addDays(parseISO(rangeStart + 'T12:00:00'), direction * days);
-    router.push(`/calendar?date=${format(newDate, 'yyyy-MM-dd')}&view=${currentView}`);
+    const newDate = addDays(rangeStartDate, direction * 7);
+    router.push(`/calendar?date=${format(newDate, 'yyyy-MM-dd')}&view=week`);
   }
 
   function goToday() {
-    router.push(`/calendar?view=${currentView}`);
+    router.push(`/calendar?view=week`);
   }
 
-  function switchView(v: 'week' | 'month') {
-    setCurrentView(v);
-    router.push(`/calendar?date=${rangeStart}&view=${v}`);
-  }
-
-  // Build days for current range
-  const rangeStartDate = parseISO(rangeStart + 'T12:00:00');
-  const rangeEndDate = parseISO(rangeEnd + 'T12:00:00');
-  const days = eachDayOfInterval({ start: rangeStartDate, end: rangeEndDate });
+  // Build 7-day range (Sun-Sat style: use Mon-Sun)
+  const days = eachDayOfInterval({
+    start: rangeStartDate,
+    end: addDays(rangeStartDate, 6),
+  });
 
   // Group reminders by date
   const remindersByDate: Record<string, Reminder[]> = {};
@@ -82,112 +93,180 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
     remindersByDate[d].push(r);
   }
 
-  const isWeek = currentView === 'week';
-
   return (
-    <div className="flex flex-col gap-6">
-      {/* Nav bar */}
+    <div className="flex flex-col gap-5">
+      {/* Always Running section */}
+      <div>
+        <p className="mb-2" style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>
+          Always Running
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          {ALWAYS_RUNNING.map((job) => (
+            <span
+              key={job.label}
+              className="text-xs px-3 py-1 rounded-full"
+              style={{ background: `${job.color}15`, color: job.color, border: `1px solid ${job.color}25` }}
+            >
+              {job.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Navigation */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <button onClick={() => navigate(-1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}><ChevronLeft size={18} /></button>
           <button onClick={goToday} className="text-xs px-3 py-1 rounded" style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>Today</button>
           <button onClick={() => navigate(1)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}><ChevronRight size={18} /></button>
           <span className="text-sm font-medium ml-2" style={{ color: 'var(--text)' }}>
-            {format(rangeStartDate, 'MMM d')} — {format(rangeEndDate, 'MMM d, yyyy')}
+            {format(rangeStartDate, 'MMM d')} — {format(addDays(rangeStartDate, 6), 'MMM d, yyyy')}
           </span>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => switchView('week')}
-            className="text-xs px-3 py-1 rounded"
-            style={{ background: isWeek ? 'var(--surface-3)' : 'var(--surface)', border: '1px solid var(--border)', color: isWeek ? 'var(--text)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: isWeek ? 600 : 400 }}
-          >Week</button>
-          <button
-            onClick={() => switchView('month')}
-            className="text-xs px-3 py-1 rounded"
-            style={{ background: !isWeek ? 'var(--surface-3)' : 'var(--surface)', border: '1px solid var(--border)', color: !isWeek ? 'var(--text)' : 'var(--text-muted)', cursor: 'pointer', fontWeight: !isWeek ? 600 : 400 }}
-          >Month</button>
-        </div>
+        <span className="text-xs px-3 py-1 rounded" style={{ background: 'var(--surface-3)', color: 'var(--text)', fontWeight: 600, border: '1px solid var(--border)' }}>
+          Week
+        </span>
       </div>
 
-      {/* Calendar grid */}
+      {/* Week time grid */}
       <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
         {/* Day headers */}
-        <div
-          className="grid"
-          style={{
-            gridTemplateColumns: isWeek ? 'repeat(7, 1fr)' : 'repeat(7, 1fr)',
-            background: 'var(--surface)',
-            borderBottom: '1px solid var(--border)',
-          }}
-        >
-          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
-            <div key={d} className="px-2 py-2 text-center" style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>
-              {d}
-            </div>
-          ))}
-        </div>
-
-        {/* Day cells */}
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(7, 1fr)' }}>
+        <div className="grid" style={{ gridTemplateColumns: '48px repeat(7, 1fr)', background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+          <div />
           {days.map((day) => {
             const dayStr = format(day, 'yyyy-MM-dd');
             const isToday = dayStr === today;
+            return (
+              <div key={dayStr} className="text-center py-2.5 flex flex-col items-center gap-0.5" style={{ borderLeft: '1px solid var(--border)' }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: isToday ? 'var(--cyan)' : 'var(--text-faint)' }}>
+                  {format(day, 'EEE')}
+                </span>
+                <span
+                  className="text-sm font-medium rounded-full px-2 py-0.5"
+                  style={{ color: isToday ? 'var(--bg)' : 'var(--text-muted)', background: isToday ? 'var(--cyan)' : 'transparent' }}
+                >
+                  {format(day, 'd')}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* All day events row */}
+        {days.some((day) => {
+          const dayStr = format(day, 'yyyy-MM-dd');
+          return (eventsMap[dayStr] ?? []).some(e => e.allDay);
+        }) && (
+          <div className="grid" style={{ gridTemplateColumns: '48px repeat(7, 1fr)', borderBottom: '1px solid var(--border)', background: 'var(--bg)' }}>
+            <div className="flex items-center justify-end pr-2" style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)' }}>ALL</div>
+            {days.map((day) => {
+              const dayStr = format(day, 'yyyy-MM-dd');
+              const allDayEvents = (eventsMap[dayStr] ?? []).filter(e => e.allDay);
+              return (
+                <div key={dayStr} className="p-1 flex flex-col gap-0.5" style={{ borderLeft: '1px solid var(--border)', minHeight: 28 }}>
+                  {allDayEvents.map((e) => (
+                    <div key={e.id} className="text-xs truncate px-1.5 py-0.5 rounded" style={{ background: 'rgba(16,185,129,0.12)', color: 'var(--green)', fontSize: '10px' }}>
+                      {e.title}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Time grid body */}
+        <div className="relative grid" style={{ gridTemplateColumns: '48px repeat(7, 1fr)' }}>
+          {/* Time labels column + hour lines */}
+          <div style={{ position: 'relative' }}>
+            {HOURS.map((h) => (
+              <div
+                key={h}
+                className="flex items-start justify-end pr-2"
+                style={{ height: HOUR_HEIGHT, fontFamily: "var(--font-mono)", fontSize: '9px', color: 'var(--text-faint)', paddingTop: 2, borderBottom: '1px solid var(--border)' }}
+              >
+                {String(h).padStart(2, '0')}:00
+              </div>
+            ))}
+          </div>
+
+          {/* Day columns */}
+          {days.map((day) => {
+            const dayStr = format(day, 'yyyy-MM-dd');
+            const isToday = dayStr === today;
+            const dayEvents = (eventsMap[dayStr] ?? []).filter(e => !e.allDay);
             const dayReminders = remindersByDate[dayStr] ?? [];
-            const dayEvents = eventsMap[dayStr] ?? [];
 
             return (
               <div
                 key={dayStr}
-                className="flex flex-col gap-0.5 p-1.5"
-                style={{
-                  minHeight: isWeek ? 120 : 80,
-                  borderRight: '1px solid var(--border)',
-                  borderBottom: '1px solid var(--border)',
-                  background: isToday ? 'rgba(6,182,212,0.05)' : 'var(--bg)',
-                }}
+                className="relative"
+                style={{ borderLeft: '1px solid var(--border)', background: isToday ? 'rgba(6,182,212,0.03)' : 'transparent' }}
               >
-                <span
-                  className="text-xs font-medium self-end px-1 rounded-full"
-                  style={{
-                    color: isToday ? 'var(--bg)' : 'var(--text-muted)',
-                    background: isToday ? 'var(--cyan)' : 'transparent',
-                    fontSize: '11px',
-                  }}
-                >
-                  {format(day, 'd')}
-                </span>
-
-                {/* Calendar events */}
-                {dayEvents.slice(0, isWeek ? 4 : 2).map((e) => (
-                  <div key={e.id} className="text-xs truncate px-1 py-0.5 rounded" style={{ background: 'rgba(16,185,129,0.1)', color: 'var(--green)', fontSize: '10px' }}>
-                    {!e.allDay && <span style={{ fontFamily: "var(--font-mono)" }}>{fmtTime(e.start)} </span>}
-                    {e.title}
-                  </div>
+                {/* Hour grid lines */}
+                {HOURS.map((h) => (
+                  <div key={h} style={{ height: HOUR_HEIGHT, borderBottom: '1px solid var(--border)' }} />
                 ))}
 
-                {/* Reminders */}
-                {dayReminders.slice(0, isWeek ? 4 : 2).map((r) => (
-                  <div
-                    key={r.id}
-                    className="text-xs truncate px-1 py-0.5 rounded cursor-pointer"
-                    style={{
-                      background: `${statusColor(r.status)}15`,
-                      color: statusColor(r.status),
-                      fontSize: '10px',
-                    }}
-                    onClick={() => setSelectedReminder(r)}
-                  >
-                    <Bell size={8} className="inline mr-0.5" style={{ verticalAlign: 'middle' }} />
-                    {fmtTime(r.scheduled_at)} {r.title}
-                  </div>
-                ))}
+                {/* Event cards (positioned absolutely) */}
+                {dayEvents.map((e) => {
+                  const start = getHourMinute(e.start);
+                  const end = getHourMinute(e.end);
+                  const topOffset = ((start.hour - HOURS[0]) + start.min / 60) * HOUR_HEIGHT;
+                  const duration = ((end.hour - start.hour) + (end.min - start.min) / 60) * HOUR_HEIGHT;
+                  const height = Math.max(duration, 20);
 
-                {(dayEvents.length + dayReminders.length) > (isWeek ? 4 : 2) && (
-                  <span className="text-xs" style={{ color: 'var(--text-faint)', fontSize: '9px' }}>
-                    +{dayEvents.length + dayReminders.length - (isWeek ? 4 : 2)} more
-                  </span>
-                )}
+                  return (
+                    <div
+                      key={e.id}
+                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-0.5 overflow-hidden"
+                      style={{
+                        top: Math.max(topOffset, 0),
+                        height,
+                        background: 'rgba(16,185,129,0.15)',
+                        borderLeft: '2px solid var(--green)',
+                        fontSize: '10px',
+                        color: 'var(--text)',
+                        zIndex: 2,
+                      }}
+                    >
+                      <div className="font-medium truncate" style={{ fontSize: '10px' }}>{e.title}</div>
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontFamily: "var(--font-mono)" }}>
+                        {fmtTime(e.start)} — {fmtTime(e.end)}
+                      </div>
+                      {e.location && <div className="truncate" style={{ fontSize: '9px', color: 'var(--text-faint)' }}>{e.location}</div>}
+                    </div>
+                  );
+                })}
+
+                {/* Reminder cards */}
+                {dayReminders.map((r) => {
+                  const start = getHourMinute(r.scheduled_at);
+                  const topOffset = ((start.hour - HOURS[0]) + start.min / 60) * HOUR_HEIGHT;
+
+                  return (
+                    <div
+                      key={r.id}
+                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-0.5 cursor-pointer"
+                      style={{
+                        top: Math.max(topOffset, 0),
+                        height: 22,
+                        background: `${statusColor(r.status)}18`,
+                        borderLeft: `2px solid ${statusColor(r.status)}`,
+                        fontSize: '10px',
+                        color: statusColor(r.status),
+                        zIndex: 3,
+                      }}
+                      onClick={() => setSelectedReminder(r)}
+                    >
+                      <div className="flex items-center gap-1 truncate">
+                        <Bell size={8} />
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px' }}>{fmtTime(r.scheduled_at)}</span>
+                        <span className="truncate">{r.title}</span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -241,10 +320,12 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
               <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Title</label>
               <p className="text-sm font-medium" style={{ color: 'var(--text)' }}>{selectedReminder.title}</p>
             </div>
-            <div>
-              <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Body</label>
-              <p className="text-sm" style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{selectedReminder.body}</p>
-            </div>
+            {selectedReminder.body && selectedReminder.body !== selectedReminder.title && (
+              <div>
+                <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Body</label>
+                <p className="text-sm" style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{selectedReminder.body}</p>
+              </div>
+            )}
             <div>
               <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Scheduled</label>
               <p className="text-sm" style={{ color: 'var(--text-muted)', fontFamily: "var(--font-mono)" }}>{format(new Date(selectedReminder.scheduled_at), 'MMM d, yyyy HH:mm')}</p>
@@ -261,7 +342,7 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
             )}
             {selectedReminder.suggested_message && (
               <div>
-                <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Suggested Message</label>
+                <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Draft Message</label>
                 <p className="text-sm rounded-lg p-3" style={{ color: 'var(--text)', background: 'var(--bg)', border: '1px solid var(--border)' }}>{selectedReminder.suggested_message}</p>
               </div>
             )}

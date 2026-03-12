@@ -9,6 +9,7 @@ export interface Reminder {
   timezone: string;
   recipient_name: string | null;
   suggested_message: string | null;
+  draft_message: string | null;
   status: 'pending' | 'done' | 'cancelled' | 'snoozed';
   created_at: string;
   updated_at: string;
@@ -25,12 +26,13 @@ export async function createReminder(data: {
   timezone: string;
   recipient_name: string | null;
   suggested_message: string | null;
+  draft_message?: string | null;
 }): Promise<Reminder> {
   const { rows } = await pool.query(
-    `INSERT INTO reminders (chat_id, title, body, scheduled_at, timezone, recipient_name, suggested_message)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO reminders (chat_id, title, body, scheduled_at, timezone, recipient_name, suggested_message, draft_message)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING *`,
-    [data.chat_id, data.title, data.body, data.scheduled_at, data.timezone, data.recipient_name, data.suggested_message]
+    [data.chat_id, data.title, data.body, data.scheduled_at, data.timezone, data.recipient_name, data.suggested_message, data.draft_message ?? null]
   );
   return rows[0];
 }

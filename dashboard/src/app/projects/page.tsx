@@ -61,7 +61,7 @@ function ProjectCard({ project: p, open, done }: { project: Project; open: Task[
   return (
     <div
       className="rounded-xl p-5 flex flex-col gap-3"
-      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+      style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderTop: `2px solid ${cfg.color}` }}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -113,9 +113,16 @@ function ProjectCard({ project: p, open, done }: { project: Project; open: Task[
         </div>
       )}
 
-      <p className="text-xs mt-auto" style={{ color: 'var(--text-faint)' }}>
-        Created {relativeTime}
-      </p>
+      <div className="flex items-center justify-between mt-auto">
+        <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+          {open.length > 0 ? `${open.length} task${open.length === 1 ? '' : 's'} open` : total > 0 ? 'All done' : 'No tasks'}
+        </p>
+        {relativeTime && (
+          <p className="text-xs" style={{ color: 'var(--text-faint)' }}>
+            {relativeTime}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

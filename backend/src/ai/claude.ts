@@ -30,7 +30,7 @@ export type UserIntent =
   | { type: 'capture'; capture_type: CaptureType; content: string; confirm_question: string }
   | { type: 'answer'; text: string; needs_tool?: string; tool_params?: Record<string, unknown> }
   | { type: 'casual'; reply: string }
-  | { type: 'clarify'; question: string };
+  | { type: 'clarify'; question: string; options?: string[] };
 
 
 const DRAFT_SYSTEM_PROMPT = `You are a personal AI OS assistant. Parse user messages and return a structured interpretation draft.
@@ -848,13 +848,23 @@ Seeking information or understanding → answer
 Brief social exchange → casual
 Genuinely ambiguous goal → clarify
 
-IMPORTANT — Calendar vs Resource disambiguation:
-When a message describes a future event with scheduling details (a date/time, a person to meet,
-a place, a duration, or words like "event", "meeting", "dinner", "lunch", "call", "session",
-"padel", "appointment"), it is a CALENDAR ACTION (app_action → calendar_create_event), NOT a
-resource or capture. This applies even when the verb is "add", "schedule", "book", "block", or
-"create". Calendar actions always take priority over resource/capture for scheduling-like content.
+IMPORTANT — Calendar vs Reminder vs Resource disambiguation:
 
+REMINDER vs CALENDAR — these are DIFFERENT systems:
+  • A REMINDER is a personal notification at a specific time. The user wants to be nudged/alerted.
+    Keywords: "remind me", "reminder", "don't forget", "nudge me", "alert me at".
+    → app_action with intent create_reminder. NEVER calendar_create_event.
+  • A CALENDAR EVENT is something that blocks time or is an appointment with others.
+    Keywords: "add to calendar", "schedule", "book", "block time", "meeting", "lunch", "padel",
+    "dinner", "session", "appointment".
+    → app_action with intent calendar_create_event. NEVER create_reminder.
+  • If the message could reasonably mean either (e.g. "add something at 3pm tomorrow"):
+    → Return clarify with question "Do you want this as a Google Calendar event or a Telegram reminder?"
+      and options: ["Calendar event", "Telegram reminder"]
+
+CALENDAR vs RESOURCE:
+When a message describes a future event with scheduling details (a date/time, a person to meet,
+a place, a duration), it is a CALENDAR ACTION, NOT a resource or capture.
 Only classify as capture/resource when the user is explicitly saving a reference (URL, article,
 link, note, recipe, quote) — not an event to be scheduled.
 
@@ -917,7 +927,11 @@ FOR casual:
 { "type": "casual", "reply": "short natural response" }
 
 FOR clarify:
-{ "type": "clarify", "question": "one short clarifying question" }
+{
+  "type": "clarify",
+  "question": "one short clarifying question",
+  "options": ["option 1", "option 2", "option 3"]  // up to 3 suggested options (optional)
+}
 
 ━━━ Day Plan Mutation types ━━━
 
@@ -1011,6 +1025,8 @@ promote_idea_to_project: { "intent": "promote_idea_to_project", "data": { "posit
 daily_debrief:       { "intent": "daily_debrief",       "data": {} }
 weekly_review:       { "intent": "weekly_review",       "data": {} }
 within_review:       { "intent": "within_review",       "data": {} }
+update_task_description: { "intent": "update_task_description", "data": { "task_id": "UUID", "task_title": "...", "description": "..." } }
+create_reminder:     { "intent": "create_reminder",     "data": { "title": "...", "body": "...", "scheduled_at": "ISO8601", "recipient_name": "...", "draft_message": "..." } }
 undo_last:           { "intent": "undo_last",           "data": {} }
 unknown:             { "intent": "unknown",             "data": { "message": "..." } }
 
@@ -1033,6 +1049,22 @@ Calendar intent rules:
 - For updates with multiple possible matches: set confidence to "medium" and confirm_needed:true
 - Calendar actions use keywords: add, schedule, create, block, book → create; move, change, reschedule, push → update; cancel, remove, delete → delete
 
+Reminder intent rules:
+- "remind me to call mom tomorrow at 3pm" → create_reminder with title "Call mom", scheduled_at tomorrow 15:00, HIGH, confirm:false
+- "create a reminder for 12:00 today to send my dad a message" → create_reminder, NOT calendar_create_event
+- "remind me to check Zapier integration tomorrow" → create_reminder, HIGH, confirm:false
+- "don't let me forget to message Johan at 11" → create_reminder with draft_message
+- When someone is mentioned ("message X", "call X", "text X"), set recipient_name and generate a short draft_message
+- draft_message should be human, short, warm — no dashes, no business jargon
+- NEVER create a calendar_create_event when the user says "remind me" or "reminder"
+
+Task description rules:
+- "add description to [task]: [text]" → update_task_description
+- "add as description: [text]" → update_task_description (uses last_task from context if available)
+- If the user references "that task" or "that one" and last_task is available in context, use last_task.id
+- If task_title could match multiple tasks, set confidence to "low" and ask which task
+- This intent NEVER triggers calendar event lookup — it updates the task.description field only
+
 App intent rules:
 - "let's update the within notion", "sync within tasks", "update fay on what i've been doing", "review the within tasks", "let's update fay", "within update", "notion update" → within_review, HIGH, confirm:false
 - Default due_date for new tasks: Today date from context (unless user specifies another date)
@@ -1044,6 +1076,21 @@ App intent rules:
 - Numbered idea refs (e.g. "idea 2") → use position in set_idea_next_step/promote_idea_to_project
 - Use full UUIDs from context; resolve relative dates from Today/Tomorrow in context
 
+Entity references — resolving "that one", "yeah that", etc.:
+The context may include LAST REFERENCED ENTITIES (last_task, last_calendar_event, last_reminder).
+When the user says "that one", "yeah that", "the one I just mentioned", or similar:
+  1. Check which entity type makes sense given what they want to do
+  2. If last_task exists and they want to update a task → use last_task.id
+  3. If last_calendar_event exists and they want to modify an event → use last_calendar_event.id
+  4. If last_reminder exists and they want to change a reminder → use last_reminder.id
+  5. If multiple entity types are plausible, ask: "Which one do you mean?" with options
+  6. If no last_* entity exists for the type they need, ask them to specify
+
+Ambiguity policy:
+  1. If the message could mean both calendar event and reminder → clarify with options
+  2. If the message references "that one" and multiple entities are plausible → clarify with entity names
+  3. If critical fields are missing (e.g. time for a reminder) → clarify asking for the missing field
+
 Confidence rules:
 - high: clear command, one obvious interpretation → execute immediately
 - medium with low stakes: execute; set follow_up_question if key detail is inferred
@@ -1051,6 +1098,12 @@ Confidence rules:
 - low: genuinely ambiguous → include follow_up_question; do NOT execute
 
 Do NOT show robotic phrases like "request malformed". Speak naturally.`;
+
+export interface EntityRefs {
+  last_task?: { id: string; title: string } | null;
+  last_calendar_event?: { id: string; title: string; start: string } | null;
+  last_reminder?: { id: string; title: string; fire_at: string } | null;
+}
 
 export async function interpretUserIntent(
   userMessage: string,
@@ -1060,6 +1113,7 @@ export async function interpretUserIntent(
   calendarEvents: Array<{ id: string; title: string; start: string; end: string; allDay: boolean }>,
   planDate: string,
   tomorrowDate: string,
+  entityRefs?: EntityRefs,
 ): Promise<UserIntent> {
   const contextStr = contextPackToString(context);
 
@@ -1083,7 +1137,16 @@ export async function interpretUserIntent(
       return `  - ${e.title} [id:${e.id}] ${startStr}–${endStr}`;
     }).join('\n') || '  (none)';
 
-  const userContent = `${historySection}Context:\n${contextStr}
+  let entityRefsText = '';
+  if (entityRefs) {
+    const parts: string[] = [];
+    if (entityRefs.last_task) parts.push(`  last_task: [${entityRefs.last_task.id.slice(0, 8)}] "${entityRefs.last_task.title}"`);
+    if (entityRefs.last_calendar_event) parts.push(`  last_calendar_event: [${entityRefs.last_calendar_event.id.slice(0, 12)}] "${entityRefs.last_calendar_event.title}" (${entityRefs.last_calendar_event.start})`);
+    if (entityRefs.last_reminder) parts.push(`  last_reminder: [${entityRefs.last_reminder.id.slice(0, 8)}] "${entityRefs.last_reminder.title}" (fire_at: ${entityRefs.last_reminder.fire_at})`);
+    if (parts.length > 0) entityRefsText = `\n\nLAST REFERENCED ENTITIES:\n${parts.join('\n')}`;
+  }
+
+  const userContent = `${historySection}Context:\n${contextStr}${entityRefsText}
 
 Day plan for ${planDate}:
 ${scheduleText}

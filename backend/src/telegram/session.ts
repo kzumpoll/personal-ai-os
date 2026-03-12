@@ -66,6 +66,42 @@ export function extractPositionalNumbers(text: string): number[] {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Entity reference tracking — tracks the last referenced task/event/reminder
+// per chat so the LLM can resolve "that one", "yeah that", etc.
+// Ephemeral display state — in-memory only, like task/idea list refs.
+// ---------------------------------------------------------------------------
+
+export interface EntityRef {
+  last_task?: { id: string; title: string } | null;
+  last_calendar_event?: { id: string; title: string; start: string } | null;
+  last_reminder?: { id: string; title: string; fire_at: string } | null;
+}
+
+const entityRefs = new Map<number, EntityRef>();
+
+export function setLastTaskRef(chatId: number, task: { id: string; title: string }): void {
+  const ref = entityRefs.get(chatId) ?? {};
+  ref.last_task = task;
+  entityRefs.set(chatId, ref);
+}
+
+export function setLastCalendarEventRef(chatId: number, event: { id: string; title: string; start: string }): void {
+  const ref = entityRefs.get(chatId) ?? {};
+  ref.last_calendar_event = event;
+  entityRefs.set(chatId, ref);
+}
+
+export function setLastReminderRef(chatId: number, reminder: { id: string; title: string; fire_at: string }): void {
+  const ref = entityRefs.get(chatId) ?? {};
+  ref.last_reminder = reminder;
+  entityRefs.set(chatId, ref);
+}
+
+export function getEntityRefs(chatId: number): EntityRef {
+  return entityRefs.get(chatId) ?? {};
+}
+
 export type SessionState =
   | { state: 'idle' }
   | {
