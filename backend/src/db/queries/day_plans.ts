@@ -3,7 +3,7 @@ import pool from '../client';
 export interface ScheduleBlock {
   time: string;         // HH:MM
   title: string;
-  type: 'event' | 'mit' | 'p1' | 'p2' | 'task' | 'break' | 'free' | 'wake' | 'work_start';
+  type: 'event' | 'mit' | 'p1' | 'p2' | 'task' | 'break' | 'travel' | 'free' | 'wake' | 'work_start';
   duration_min: number;
 }
 

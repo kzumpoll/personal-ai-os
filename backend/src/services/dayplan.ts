@@ -122,9 +122,6 @@ export function generateDayPlan(params: {
     schedule.push({ time: toHHMM(workStartMin), title: `${e.title} (all day)`, type: 'event', duration_min: 0 });
   }
 
-  // Build a simple free-slot tracker
-  let cursor = workStartMin;
-
   // Define tasks to schedule in order
   const taskSlots: TaskSlot[] = [];
   taskSlots.push({ title: 'Clear Inbox', type: 'task', duration_min: 60 });
@@ -157,7 +154,7 @@ export function generateDayPlan(params: {
       const conflict = occupied.find((o) => beforeStart < o.end && eventStart > o.start && o.title !== e.title);
       if (!conflict) {
         occupied.push({ start: beforeStart, end: eventStart, title: `Travel to padel (${e.title})` });
-        schedule.push({ time: toHHMM(beforeStart), title: 'Travel to padel', type: 'break', duration_min: 30 });
+        schedule.push({ time: toHHMM(beforeStart), title: 'Travel to padel', type: 'travel', duration_min: 30 });
       }
     }
 
@@ -167,7 +164,7 @@ export function generateDayPlan(params: {
       const conflict = occupied.find((o) => eventEnd < o.end && afterEnd > o.start && o.title !== e.title);
       if (!conflict) {
         occupied.push({ start: eventEnd, end: afterEnd, title: `Travel from padel (${e.title})` });
-        schedule.push({ time: toHHMM(eventEnd), title: 'Travel from padel', type: 'break', duration_min: 30 });
+        schedule.push({ time: toHHMM(eventEnd), title: 'Travel from padel', type: 'travel', duration_min: 30 });
       }
     }
   }
@@ -195,41 +192,42 @@ export function generateDayPlan(params: {
     });
   }
 
-  // Place tasks in free slots, advancing cursor past occupied time
-  let lastPlacedEnd = workStartMin;
+  // Build list of free gaps by subtracting occupied from [workStartMin, workEndMin]
+  const sortedOcc = [...occupied].sort((a, b) => a.start - b.start);
+  const gaps: Array<{ start: number; end: number }> = [];
+  let gapCursor = workStartMin;
+  for (const occ of sortedOcc) {
+    if (occ.start > gapCursor) {
+      gaps.push({ start: gapCursor, end: occ.start });
+    }
+    if (occ.end > gapCursor) gapCursor = occ.end;
+  }
+  if (gapCursor < workEndMin) {
+    gaps.push({ start: gapCursor, end: workEndMin });
+  }
+
+  // Place tasks into gaps chronologically, skipping gaps < 15 min
+  let gapIdx = 0;
+  let gapPos = gaps.length > 0 ? gaps[0].start : workEndMin;
   for (const slot of taskSlots) {
     let placed = false;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const conflict = occupied.find(
-        (o) => cursor < o.end && cursor + slot.duration_min > o.start
-      );
-      if (conflict) {
-        cursor = conflict.end + 10; // 10min buffer after events
-        continue;
-      }
-      if (cursor + slot.duration_min > workEndMin) {
-        overflow.push(slot.title);
+    while (gapIdx < gaps.length) {
+      const gap = gaps[gapIdx];
+      const available = gap.end - gapPos;
+      if (available < 15) { gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin; continue; }
+      if (slot.duration_min <= available) {
+        schedule.push({ time: toHHMM(gapPos), title: slot.title, type: slot.type, duration_min: slot.duration_min });
+        occupied.push({ start: gapPos, end: gapPos + slot.duration_min, title: slot.title });
+        gapPos += slot.duration_min + 10; // 10-min buffer between tasks
+        if (gapPos >= gap.end) { gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin; }
         placed = true;
         break;
       }
-      schedule.push({ time: toHHMM(cursor), title: slot.title, type: slot.type, duration_min: slot.duration_min });
-      lastPlacedEnd = cursor + slot.duration_min;
-      cursor += slot.duration_min + 10;
-      placed = true;
-      break;
+      // Task doesn't fit in this gap — try next gap
+      gapIdx++;
+      gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin;
     }
     if (!placed) overflow.push(slot.title);
-  }
-
-  // Add a free time block at the end if there's room before 22:30
-  const eveningEnd = parseHHMM('22:30');
-  if (lastPlacedEnd < eveningEnd - 30) {
-    schedule.push({
-      time: toHHMM(lastPlacedEnd + 10),
-      title: 'Free time',
-      type: 'free',
-      duration_min: eveningEnd - lastPlacedEnd - 10,
-    });
   }
 
   // Sort schedule by time (wake block first, then chronological)
@@ -262,8 +260,8 @@ export function formatAgendaForBot(
     p1: '▶️',
     p2: '▷',
     task: '•',
-    break: '☕',
-    free: '⬜',
+    break: '🍽️',
+    travel: '🚗',
   };
 
   const isDone = (type: string): boolean => {
@@ -317,14 +315,14 @@ export function diffDayPlans(
 
   // Blocks removed
   for (const [title] of oldByTitle) {
-    if (!newByTitle.has(title) && title !== 'Free time' && title !== 'Wake up') {
+    if (!newByTitle.has(title) && title !== 'Wake up') {
       changes.push(`Removed: ${title}`);
     }
   }
 
   // Blocks added
   for (const [title] of newByTitle) {
-    if (!oldByTitle.has(title) && title !== 'Free time' && title !== 'Wake up') {
+    if (!oldByTitle.has(title) && title !== 'Wake up') {
       changes.push(`Added: ${title}`);
     }
   }
