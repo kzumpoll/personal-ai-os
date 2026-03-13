@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { Intent, InterpretationDraft, CaptureType } from './intents';
+import { Intent, CaptureType } from './intents';
 import { ContextPack, contextPackToString } from './context';
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -33,151 +33,7 @@ export type UserIntent =
   | { type: 'clarify'; question: string; options?: string[] };
 
 
-const DRAFT_SYSTEM_PROMPT = `You are a personal AI OS assistant. Parse user messages and return a structured interpretation draft.
-
-Always respond with a single JSON object. Never add prose outside the JSON.
-
-Output format:
-{
-  "intent": { <full intent object — see schema below> },
-  "normalized_meaning": "plain English summary of what was understood",
-  "confidence": "high" | "medium" | "low",
-  "ambiguities": ["describe any ambiguity here, or leave empty array"],
-  "user_facing_summary": "friendly natural sentence: what you will do, or what you need clarified",
-  "confirm_needed": false,
-  "follow_up_question": "one concise question — include only when confidence is low"
-}
-
-Intent schema (the "intent" field must always be one of these):
-  create_task:    { "intent": "create_task",    "data": { "title": "...", "notes"?: "...", "due_date"?: "YYYY-MM-DD", "project_id"?: "..." } }
-  list_tasks:     { "intent": "list_tasks",     "data": { "filter"?: "overdue"|"today"|"tomorrow"|"upcoming"|"all" } }
-  complete_task:  { "intent": "complete_task",  "data": { "task_id"?: "UUID", "task_title"?: "..." } }
-  move_task_date: { "intent": "move_task_date", "data": { "task_id"?: "UUID", "task_title"?: "...", "new_due_date": "YYYY-MM-DD" } }
-  add_thought:    { "intent": "add_thought",    "data": { "content": "..." } }
-  add_idea:       { "intent": "add_idea",       "data": { "content": "...", "actionability"?: "..." } }
-  add_win:        { "intent": "add_win",        "data": { "content": "...", "entry_date"?: "YYYY-MM-DD" } }
-  add_goal:       { "intent": "add_goal",       "data": { "title": "...", "description"?: "...", "target_date"?: "YYYY-MM-DD" } }
-  create_resource:{ "intent": "create_resource","data": { "title": "...", "content_or_url"?: "...", "type"?: "..." } }
-  daily_debrief:  { "intent": "daily_debrief",  "data": {} }
-  undo_last:      { "intent": "undo_last",       "data": {} }
-  unknown:        { "intent": "unknown",         "data": { "message": "..." } }
-
-ALWAYS include the "data" field, even if empty (e.g. "data": {}).
-
-Confidence + confirm_needed rules:
-  "high" + confirm_needed: false  → execute immediately. Use for: list/view requests, clear single-step commands.
-  "high" + confirm_needed: true   → confirm first. Use for: destructive/irreversible actions that are unambiguous.
-  "medium" + confirm_needed: true → confirm first. Use for: vague statements that could be ideas/thoughts ("X could be cool"), or actions where key detail is inferred.
-  "medium" + confirm_needed: false→ execute. Use for: likely correct but non-destructive (e.g. reading tasks) where a guess is fine.
-  "low" + confirm_needed: false   → ask a clarifying question. Use for: genuinely unclear messages. Include follow_up_question.
-
-Natural language tolerance:
-  "show tasks", "what do i have today", "what's on today", "show tasks for today" → list_tasks filter:today, HIGH, confirm:false
-  "what do i need to do today", "what is on today" → list_tasks filter:today, HIGH, confirm:false
-  "mark 1 done" → complete_task (match task 1 from context TODAY list by position), HIGH, confirm:false
-  "mark 1 and 2 done" → complete_task for task 1, MEDIUM, confirm:true — note in summary that task 2 also needs doing
-  "mark 1,2,,7,8,2728 done" → LOW confidence — follow_up_question asking which tasks they mean
-  "X could be cool", "i had an idea about X", "been thinking about X" → add_idea, MEDIUM, confirm:true
-  "remember X", "note X" → add_thought, HIGH, confirm:false
-
-Numbered task references (e.g. "1", "2", "3") refer to the positional order of tasks in the TODAY list from context.
-Use the full UUID from context when resolving task IDs. For dates, resolve relative terms using the Today date in context.`;
-
-const SYSTEM_PROMPT = `You are a personal AI operating system assistant. Parse user messages and return structured JSON intents.
-
-Always respond with a single JSON object. Never add prose outside the JSON.
-
-Available intents:
-- create_task: { title, notes?, due_date? (YYYY-MM-DD), project_id? }
-- list_tasks: { filter?: 'overdue'|'today'|'tomorrow'|'upcoming'|'all' }
-- complete_task: { task_id? (8-char prefix from context), task_title? }
-- move_task_date: { task_id? (8-char prefix), task_title?, new_due_date (YYYY-MM-DD) }
-- add_thought: { content }
-- add_idea: { content, actionability? }
-- add_win: { content, entry_date? (YYYY-MM-DD) }
-- add_goal: { title, description?, target_date? (YYYY-MM-DD) }
-- create_resource: { title, content_or_url?, type? }
-- daily_debrief: {}
-- undo_last: {}
-- unknown: { message }
-
-Use task IDs from the context when matching tasks by name.
-For dates, resolve relative terms (today, tomorrow, next Monday, etc.) using the "Today" date in context.
-For task IDs: use the full UUID from context, not the 8-char prefix, in the output.`;
-
-export async function interpretMessage(
-  userMessage: string,
-  context: ContextPack
-): Promise<Intent> {
-  const contextStr = contextPackToString(context);
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 512,
-    system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: `Context:\n${contextStr}\n\nMessage: ${userMessage}`,
-      },
-    ],
-  });
-
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
-
-  try {
-    // Strip markdown code blocks if present
-    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    return JSON.parse(cleaned) as Intent;
-  } catch {
-    return { intent: 'unknown', data: { message: text } };
-  }
-}
-
-export async function interpretWithDraft(
-  userMessage: string,
-  context: ContextPack
-): Promise<InterpretationDraft> {
-  const contextStr = contextPackToString(context);
-
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 768,
-    system: DRAFT_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: `Context:\n${contextStr}\n\nMessage: ${userMessage}`,
-      },
-    ],
-  });
-
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
-
-  try {
-    const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-    const draft = JSON.parse(cleaned) as InterpretationDraft;
-
-    // Guarantee intent.data always exists — prevents the undefined-filter crash
-    if (draft.intent && !draft.intent.data) {
-      (draft.intent as unknown as Record<string, unknown>).data = {};
-    }
-    if (!Array.isArray(draft.ambiguities)) {
-      draft.ambiguities = [];
-    }
-    return draft;
-  } catch {
-    return {
-      intent: { intent: 'unknown', data: { message: text } },
-      normalized_meaning: 'Could not parse AI response',
-      confidence: 'low',
-      ambiguities: ['Failed to parse interpretation'],
-      user_facing_summary: "I didn't quite catch that — could you rephrase?",
-      confirm_needed: false,
-      follow_up_question: "I didn't quite catch that — could you rephrase?",
-    };
-  }
-}
+// Legacy DRAFT_SYSTEM_PROMPT and SYSTEM_PROMPT removed — all routing goes through UNIFIED_SYSTEM_PROMPT now.
 
 
 // ---------------------------------------------------------------------------
@@ -1031,83 +887,31 @@ create_reminder:     { "intent": "create_reminder",     "data": { "title": "..."
 undo_last:           { "intent": "undo_last",           "data": {} }
 unknown:             { "intent": "unknown",             "data": { "message": "..." } }
 
-Calendar intent rules:
-- "add padel tomorrow at 11" → calendar_create_event with title "Padel", start tomorrow at 11:00, end at 12:00 (default 1h), HIGH, confirm:false
-- "lunch with Fay Friday 1:30" → calendar_create_event with title "Lunch with Fay", start Friday 13:30, end 14:30, HIGH, confirm:false
-- "block 2 hours tomorrow morning for deep work" → calendar_create_event with title "Deep work", start tomorrow 09:00, end 11:00, HIGH, confirm:false
-- "dinner tonight at 7" → calendar_create_event with title "Dinner", start today 19:00, end 20:00, HIGH, confirm:false
-- "add tea session Sunday at 4pm in Ubud" → calendar_create_event with title "Tea session", start Sunday 16:00, end 17:00, location "Ubud", HIGH, confirm:false
-- "move padel tomorrow to 12" → calendar_update_event with event_title "Padel", search_date tomorrow, new_start 12:00, HIGH, confirm:false
-- "cancel lunch with Fay on Friday" → calendar_delete_event with event_title "Lunch with Fay", search_date Friday, MEDIUM, confirm_needed:true
-- "reschedule Website Review to Monday at 10" → calendar_update_event, MEDIUM, confirm:false
-- When no end time is specified, default event duration is 1 hour
-- When only "morning" is said without a time, use 09:00; "afternoon" → 14:00; "evening" → 19:00
-- "block N hours" → set duration to N hours from the start time
-- Use event_id from calendar events in context when available; otherwise use event_title + search_date for lookup
-- Resolve all relative dates (today, tomorrow, Friday, next Monday, etc.) using Today/Tomorrow from context
-- When critical details are missing (e.g. "add lunch Friday" with no time), set confidence to "low" and include follow_up_question asking for the missing detail
-- For deletes: always set confirm_needed:true unless the match is unambiguous (exact title + date)
-- For updates with multiple possible matches: set confidence to "medium" and confirm_needed:true
-- Calendar actions use keywords: add, schedule, create, block, book → create; move, change, reschedule, push → update; cancel, remove, delete → delete
-- COMPOUND: "Tomorrow 10:00 call Johan and remind me 15 min before" → calendar_create_event with reminder_also (reminder at 09:45). Use this whenever the user asks for BOTH an event AND a reminder in one message.
-- CORRECTION: When the user corrects a previous action (LAST ACTION in context), handle it naturally:
-  - "no remove that, it should be a reminder" → delete the last entity + create a reminder with same details
-  - "no don't add to calendar" → calendar_delete_event for the last calendar event
-  - "make that a reminder instead" → delete last calendar event + create_reminder with same time/title
-  - "actually cancel that" → undo the last action (delete event/reminder/task)
-  - "ask first" / "confirm first" → note: the system will handle future confirmation changes
-  If LAST ACTION context exists, use its entity_id to target the correction. If unsure, use clarify with options.
-- AMBIGUITY between reminder and calendar: If the user's request could be either (e.g. "add call with Johan at 10"), prefer calendar_create_event but return type "clarify" with options: ["Calendar event", "Telegram reminder", "Both"] — ONLY when the intent is genuinely ambiguous. Clear signals: "remind me" → reminder; "add to calendar/schedule" → calendar event.
+Calendar rules:
+- Default duration: 1h. "block N hours" → N-hour duration. "morning"→09:00, "afternoon"→14:00, "evening"→19:00.
+- Use event_id from context when available; else event_title + search_date.
+- Resolve relative dates from Today/Tomorrow in context.
+- Missing critical details (no time) → confidence:"low", include follow_up_question.
+- Deletes: confirm_needed:true. Updates with multiple matches: confidence:"medium", confirm_needed:true.
+- Keywords: add/schedule/create/block/book → create; move/change/reschedule → update; cancel/remove/delete → delete.
+- COMPOUND: "call Johan at 10 and remind me 15 min before" → calendar_create_event with reminder_also.
+- CORRECTION: When LAST ACTION exists and user corrects ("no remove that", "make it a reminder instead"), use entity_id to undo/replace.
+- AMBIGUITY: "remind me" → reminder; "add to calendar" → event. Genuinely ambiguous → clarify with options ["Calendar event", "Telegram reminder", "Both"].
 
-Reminder intent rules:
-- "remind me to call mom tomorrow at 3pm" → create_reminder with title "Call mom", scheduled_at tomorrow 15:00, HIGH, confirm:false
-- "create a reminder for 12:00 today to send my dad a message" → create_reminder, NOT calendar_create_event
-- "remind me to check Zapier integration tomorrow" → create_reminder, HIGH, confirm:false
-- "don't let me forget to message Johan at 11" → create_reminder with draft_message
-- When someone is mentioned ("message X", "call X", "text X"), set recipient_name and generate a short draft_message
-- draft_message should be human, short, warm — no dashes, no business jargon
-- NEVER create a calendar_create_event when the user says "remind me" or "reminder"
+Reminder rules:
+- "remind me" / "reminder" / "don't forget" → create_reminder, NEVER calendar_create_event.
+- When someone is mentioned, set recipient_name and generate a short, warm draft_message.
 
-Task description rules:
-- "add description to [task]: [text]" → update_task_description
-- "add as description: [text]" → update_task_description (uses last_task from context if available)
-- If the user references "that task" or "that one" and last_task is available in context, use last_task.id
-- If task_title could match multiple tasks, set confidence to "low" and ask which task
-- This intent NEVER triggers calendar event lookup — it updates the task.description field only
+Task/App rules:
+- "within update"/"let's update fay"/"notion update" → within_review
+- Default due_date: Today. Bulk list → create_tasks_bulk. Group ops → confirm_needed:true.
+- Positional refs ("mark 1 done") → resolve UUIDs from context task list.
+- "that one"/"yeah that" → check LAST REFERENCED ENTITIES. Multiple plausible → clarify with options.
+- Goal = aspiration over weeks/months; task = single actionable step.
+- update_task_description: "add description to [task]" or "that task" with last_task context.
 
-App intent rules:
-- "let's update the within notion", "sync within tasks", "update fay on what i've been doing", "review the within tasks", "let's update fay", "within update", "notion update" → within_review, HIGH, confirm:false
-- Default due_date for new tasks: Today date from context (unless user specifies another date)
-- "today" → Today date from context; "tomorrow" → Tomorrow date; resolve relative dates from context
-- Goal vs Task: goal = aspiration/outcome over weeks/months; task = single actionable step
-- Bulk task list (2+ numbered/bulleted items) → create_tasks_bulk
-- Group operations (overdue, all today) → confirm_needed:true
-- Positional task refs (e.g. "mark 1 done") → use positions array; resolve UUIDs from context task list
-- Numbered idea refs (e.g. "idea 2") → use position in set_idea_next_step/promote_idea_to_project
-- Use full UUIDs from context; resolve relative dates from Today/Tomorrow in context
-
-Entity references — resolving "that one", "yeah that", etc.:
-The context may include LAST REFERENCED ENTITIES (last_task, last_calendar_event, last_reminder).
-When the user says "that one", "yeah that", "the one I just mentioned", or similar:
-  1. Check which entity type makes sense given what they want to do
-  2. If last_task exists and they want to update a task → use last_task.id
-  3. If last_calendar_event exists and they want to modify an event → use last_calendar_event.id
-  4. If last_reminder exists and they want to change a reminder → use last_reminder.id
-  5. If multiple entity types are plausible, ask: "Which one do you mean?" with options
-  6. If no last_* entity exists for the type they need, ask them to specify
-
-Ambiguity policy:
-  1. If the message could mean both calendar event and reminder → clarify with options
-  2. If the message references "that one" and multiple entities are plausible → clarify with entity names
-  3. If critical fields are missing (e.g. time for a reminder) → clarify asking for the missing field
-
-Confidence rules:
-- high: clear command, one obvious interpretation → execute immediately
-- medium with low stakes: execute; set follow_up_question if key detail is inferred
-- medium with high stakes (destructive/bulk): confirm_needed:true
-- low: genuinely ambiguous → include follow_up_question; do NOT execute
-
-Do NOT show robotic phrases like "request malformed". Speak naturally.`;
+Confidence: high → execute; medium low-stakes → execute with follow_up; medium high-stakes → confirm; low → ask.
+Speak naturally, never robotic.`;
 
 export interface EntityRefs {
   last_task?: { id: string; title: string } | null;
