@@ -1245,7 +1245,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         // Track entity references for follow-up resolution ("that one", "yeah that")
         if (result.success && result.data && typeof result.data === 'object') {
           const d = result.data as Record<string, unknown>;
-          if (d._entity === 'task' || appIntent.intent === 'create_task' || appIntent.intent === 'complete_task' || appIntent.intent === 'update_task_description') {
+          if (d._entity === 'task' || appIntent.intent === 'create_task' || appIntent.intent === 'complete_task' || appIntent.intent === 'update_task_description' || appIntent.intent === 'move_task_date') {
             if (d.id && d.title) setLastTaskRef(chatId, { id: String(d.id), title: String(d.title) });
           }
           if (d._entity === 'reminder' || appIntent.intent === 'create_reminder') {

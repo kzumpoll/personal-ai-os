@@ -9,7 +9,7 @@ import {
   getTasksForDate,
   getTaskByTitle,
   getTaskById,
-  getTaskByIdPrefix,
+  getTasksByIdPrefix,
 } from '../db/queries/tasks';
 import { createThought, getAllThoughts } from '../db/queries/thoughts';
 import { createIdea, getAllIdeas, getIdeaById, getIdeaByContent, updateIdeaNextStep, linkIdeaToProject } from '../db/queries/ideas';
@@ -40,19 +40,43 @@ export interface MutationResult {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Resolve a task by ID (full UUID or short prefix) or title. */
-async function resolveTask(taskId?: string, taskTitle?: string) {
+type TaskResolution =
+  | { kind: 'found'; task: Awaited<ReturnType<typeof getTaskById>> & {} }
+  | { kind: 'ambiguous'; candidates: Awaited<ReturnType<typeof getTasksByIdPrefix>> }
+  | { kind: 'not_found' };
+
+/**
+ * Resolve a task by ID (full UUID or short prefix) or title.
+ * Never passes a non-UUID string to a UUID-typed DB column — prefixes always
+ * go through the text-cast LIKE query. Returns disambiguation candidates when
+ * a prefix matches 2–5 tasks so the caller can ask the user to pick one.
+ */
+async function resolveTask(taskId?: string, taskTitle?: string): Promise<TaskResolution> {
   if (taskId) {
+    // Full UUID — safe for direct DB lookup
     if (UUID_REGEX.test(taskId)) {
       const task = await getTaskById(taskId);
-      if (task) return task;
+      if (task) return { kind: 'found', task };
+    } else {
+      // Short prefix — use text-cast LIKE, never a direct UUID query
+      const matches = await getTasksByIdPrefix(taskId);
+      if (matches.length === 1) return { kind: 'found', task: matches[0] };
+      if (matches.length > 1) return { kind: 'ambiguous', candidates: matches };
     }
-    // Short prefix fallback
-    const task = await getTaskByIdPrefix(taskId);
-    if (task) return task;
   }
-  if (taskTitle) return getTaskByTitle(taskTitle);
-  return null;
+  if (taskTitle) {
+    const task = await getTaskByTitle(taskTitle);
+    if (task) return { kind: 'found', task };
+  }
+  return { kind: 'not_found' };
+}
+
+/** Format disambiguation options for the user (max 5). */
+function formatDisambiguation(candidates: Array<{ id: string; title: string; due_date?: string | null }>): string {
+  const lines = candidates.map(
+    (t, i) => `${i + 1}. ${t.title}${t.due_date ? ` (${fmtDate(t.due_date)})` : ''}`
+  );
+  return `Multiple tasks matched. Which one?\n${lines.join('\n')}`;
 }
 
 /**
@@ -237,12 +261,14 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
     case 'complete_task': {
       console.log('[complete_task] start | task_id:', intent.data.task_id ?? '(none)', '| task_title:', intent.data.task_title ?? '(none)');
-      const task = await resolveTask(intent.data.task_id, intent.data.task_title);
-      console.log('[complete_task] resolved →', task ? `"${task.title}" (${task.status})` : 'not found');
-      if (!task) {
+      const resolution = await resolveTask(intent.data.task_id, intent.data.task_title);
+      if (resolution.kind === 'not_found') {
         console.log('[complete_task] no task matched — returning error');
         return { success: false, message: 'Task not found. Try "show tasks" to see the current list.' };
       }
+      if (resolution.kind === 'ambiguous') return { success: false, message: formatDisambiguation(resolution.candidates) };
+      const task = resolution.task;
+      console.log('[complete_task] resolved →', `"${task.title}" (${task.status})`);
 
       const before = { ...task };
       console.log('[complete_task] calling completeTask for id:', task.id);
@@ -266,8 +292,10 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'move_task_date': {
-      const task = await resolveTask(intent.data.task_id, intent.data.task_title);
-      if (!task) return { success: false, message: 'Task not found.' };
+      const resolution = await resolveTask(intent.data.task_id, intent.data.task_title);
+      if (resolution.kind === 'not_found') return { success: false, message: 'Task not found.' };
+      if (resolution.kind === 'ambiguous') return { success: false, message: formatDisambiguation(resolution.candidates) };
+      const task = resolution.task;
 
       const before = { ...task };
       const updated = await updateTaskDueDate(task.id, intent.data.new_due_date);
@@ -793,8 +821,10 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
     case 'update_task_description': {
       const { task_id, task_title, description } = intent.data;
-      const task = await resolveTask(task_id, task_title);
-      if (!task) return { success: false, message: 'Task not found. Try listing your tasks first.' };
+      const resolution = await resolveTask(task_id, task_title);
+      if (resolution.kind === 'not_found') return { success: false, message: 'Task not found. Try listing your tasks first.' };
+      if (resolution.kind === 'ambiguous') return { success: false, message: formatDisambiguation(resolution.candidates) };
+      const task = resolution.task;
       const updated = await updateTask(task.id, { description });
       if (!updated) return { success: false, message: `Could not update description for "${task.title}".` };
       await logMutation({
@@ -810,13 +840,14 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     case 'create_reminder': {
       const { title, body, scheduled_at, recipient_name, suggested_message, draft_message } = intent.data;
       const { createReminder } = await import('../db/queries/reminders');
-      const { naiveToUtc } = await import('../services/localdate');
+      const { wallClockToUtc } = await import('../services/localdate');
       const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
       if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders.' };
       const effectiveDraft = draft_message ?? suggested_message ?? null;
       const userTz = process.env.USER_TZ ?? 'UTC';
-      // Convert naive datetime (wall-clock in USER_TZ) to UTC for TIMESTAMPTZ storage
-      const scheduledUtc = naiveToUtc(scheduled_at, userTz);
+      // wallClockToUtc strips any Z/offset the LLM may have appended, then
+      // converts from USER_TZ wall-clock to UTC for TIMESTAMPTZ storage.
+      const scheduledUtc = wallClockToUtc(scheduled_at, userTz);
       const reminder = await createReminder({
         chat_id: chatId,
         title,
@@ -953,11 +984,11 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
       if (reminder_also) {
         try {
           const { createReminder } = await import('../db/queries/reminders');
-          const { naiveToUtc } = await import('../services/localdate');
+          const { wallClockToUtc } = await import('../services/localdate');
           const userTz = process.env.USER_TZ ?? 'UTC';
           const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
           if (chatId) {
-            const scheduledUtc = naiveToUtc(reminder_also.scheduled_at, userTz);
+            const scheduledUtc = wallClockToUtc(reminder_also.scheduled_at, userTz);
             await createReminder({
               chat_id: chatId,
               title: reminder_also.title,

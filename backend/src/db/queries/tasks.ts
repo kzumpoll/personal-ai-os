@@ -33,14 +33,19 @@ export async function getTaskById(id: string): Promise<Task | null> {
   return rows[0] ?? null;
 }
 
-/** Resolve a short ID prefix (e.g. "4691a0d7") to a full task, if exactly one match. */
-export async function getTaskByIdPrefix(prefix: string): Promise<Task | null> {
-  const { rows } = await pool.query(
-    `SELECT * FROM tasks WHERE id::text LIKE $1 AND status != 'done' LIMIT 2`,
+/** Resolve a short ID prefix (e.g. "4691a0d7") to matching tasks (max 5). */
+export async function getTasksByIdPrefix(prefix: string): Promise<Task[]> {
+  const { rows } = await pool.query<Task>(
+    `SELECT * FROM tasks WHERE id::text LIKE $1 AND status != 'done' ORDER BY created_at DESC LIMIT 5`,
     [`${prefix}%`]
   );
-  // Only resolve if exactly one match (avoid ambiguity)
-  return rows.length === 1 ? rows[0] : null;
+  return rows;
+}
+
+/** Resolve a short ID prefix to a full task, if exactly one match. */
+export async function getTaskByIdPrefix(prefix: string): Promise<Task | null> {
+  const matches = await getTasksByIdPrefix(prefix);
+  return matches.length === 1 ? matches[0] : null;
 }
 
 export async function getTaskByTitle(title: string): Promise<Task | null> {

@@ -104,28 +104,74 @@ export function naiveToUtc(naive: string, tz?: string): string {
   // Already has offset or Z → pass through
   if (/[+-]\d{2}:\d{2}$/.test(naive) || /Z$/i.test(naive)) return naive;
 
-  // Treat the naive string as a UTC instant to compute the local offset
-  const refUtc = new Date(naive + 'Z');
-  if (isNaN(refUtc.getTime())) return naive; // unparseable — return as-is
-
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(refUtc);
-  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
-  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
-
-  // offset = localTime - utcTime
-  const offsetMs = localAsUtcMs - refUtc.getTime();
-  // The user meant this datetime in their local timezone → UTC = naive - offset
-  const correctedUtc = new Date(refUtc.getTime() - offsetMs);
-  return correctedUtc.toISOString();
+  return naiveIsoToUtc(naive, timezone);
 }
 
 /** Alias for naiveToUtc — clearer name for callsites. */
 export const localNaiveToUtcIso = naiveToUtc;
+
+/**
+ * Core conversion: interprets a naive ISO datetime as wall-clock time in the
+ * given IANA timezone and returns a UTC ISO string.
+ *
+ * Uses a two-pass approach for DST safety:
+ *   Pass 1 — treat the naive string as UTC, measure the timezone offset at that
+ *            instant, and compute a first UTC estimate.
+ *   Pass 2 — measure the offset again at the *estimated* UTC instant. If the
+ *            offset changed (DST boundary fell between the two), use the second
+ *            offset for the final result.
+ *
+ * This is correct for all IANA timezones including those with DST. Asia/Makassar
+ * (WITA, fixed UTC+8) has no DST, but the algorithm works generically so that
+ * reminders and events remain correct if USER_TZ ever changes.
+ */
+function naiveIsoToUtc(naive: string, timezone: string): string {
+  const refUtc = new Date(naive + 'Z');
+  if (isNaN(refUtc.getTime())) return naive; // unparseable — return as-is
+
+  const offsetAtInstant = (instant: Date): number => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(instant);
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+    const localMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+    return localMs - instant.getTime();
+  };
+
+  // Pass 1: offset at the naive-as-UTC instant
+  const offset1 = offsetAtInstant(refUtc);
+  const estimate = new Date(refUtc.getTime() - offset1);
+
+  // Pass 2: offset at the estimated UTC instant (may differ across DST boundary)
+  const offset2 = offsetAtInstant(estimate);
+  const correctedUtc = new Date(refUtc.getTime() - offset2);
+  return correctedUtc.toISOString();
+}
+
+/**
+ * Converts a wall-clock datetime string to UTC, **always stripping any Z suffix
+ * or UTC offset first**. Use this instead of naiveToUtc when the source is known
+ * to represent wall-clock time in USER_TZ (e.g. datetimes returned by the LLM
+ * interpreter, which is instructed to return naive ISO strings but sometimes
+ * appends Z or an offset anyway).
+ *
+ * Design note: we store reminders as TIMESTAMPTZ (UTC) + a separate `timezone`
+ * column so the DB value is unambiguous. The scheduler compares against NOW() in
+ * UTC, which is DST-proof. Display always converts back to the stored timezone.
+ * This is cleaner than storing local time + computing UTC at send time because
+ * the trigger query stays a simple `scheduled_at <= NOW()` with no per-row TZ
+ * math, and the stored instant never becomes ambiguous during DST "fall back"
+ * repeats (which don't affect Makassar today but would affect any DST timezone).
+ */
+export function wallClockToUtc(input: string, tz?: string): string {
+  const timezone = tz ?? process.env.USER_TZ ?? 'UTC';
+  // Strip any trailing Z or ±HH:MM offset — we know this is wall-clock time
+  const naive = input.replace(/Z$/i, '').replace(/[+-]\d{2}:\d{2}$/, '');
+  return naiveIsoToUtc(naive, timezone);
+}
 
 /**
  * Converts a UTC ISO string to local date/time parts in the given timezone.
