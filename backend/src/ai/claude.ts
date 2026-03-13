@@ -997,7 +997,8 @@ Calendar events (type:event in schedule) → use remove_event, not remove_block.
 ━━━ App Intent types ━━━
 
 Calendar event intents (use these for any scheduling/event request):
-calendar_create_event: { "intent": "calendar_create_event", "data": { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "all_day": false, "description": "...", "location": "..." } }
+calendar_create_event: { "intent": "calendar_create_event", "data": { "title": "...", "start_datetime": "YYYY-MM-DDTHH:MM:SS", "end_datetime": "YYYY-MM-DDTHH:MM:SS", "all_day": false, "description": "...", "location": "...", "reminder_also": { "title": "...", "scheduled_at": "YYYY-MM-DDTHH:MM:SS", "draft_message": "..." } } }
+  → reminder_also is OPTIONAL. Include it ONLY when the user explicitly asks for both a calendar event AND a reminder (e.g. "call Johan at 10 and remind me 15 min before"). Omit it for plain calendar events.
 calendar_update_event: { "intent": "calendar_update_event", "data": { "event_id": "...", "event_title": "...", "search_date": "YYYY-MM-DD", "new_title": "...", "new_start_datetime": "YYYY-MM-DDTHH:MM:SS", "new_end_datetime": "YYYY-MM-DDTHH:MM:SS" } }
 calendar_delete_event: { "intent": "calendar_delete_event", "data": { "event_id": "...", "event_title": "...", "search_date": "YYYY-MM-DD" } }
 
@@ -1048,6 +1049,8 @@ Calendar intent rules:
 - For deletes: always set confirm_needed:true unless the match is unambiguous (exact title + date)
 - For updates with multiple possible matches: set confidence to "medium" and confirm_needed:true
 - Calendar actions use keywords: add, schedule, create, block, book → create; move, change, reschedule, push → update; cancel, remove, delete → delete
+- COMPOUND: "Tomorrow 10:00 call Johan and remind me 15 min before" → calendar_create_event with reminder_also (reminder at 09:45). Use this whenever the user asks for BOTH an event AND a reminder in one message.
+- CORRECTION: If the user just created a calendar event and says "no remove that, it should be a reminder" or similar, delete the last calendar event (use last_calendar_event from context) AND create a reminder. Return calendar_delete_event for the old event. If unsure, use clarify with options: ["Replace with reminder", "Keep both"].
 
 Reminder intent rules:
 - "remind me to call mom tomorrow at 3pm" → create_reminder with title "Call mom", scheduled_at tomorrow 15:00, HIGH, confirm:false
@@ -1140,11 +1143,15 @@ export async function interpretUserIntent(
   let entityRefsText = '';
   if (entityRefs) {
     const parts: string[] = [];
-    if (entityRefs.last_task) parts.push(`  last_task: [${entityRefs.last_task.id.slice(0, 8)}] "${entityRefs.last_task.title}"`);
-    if (entityRefs.last_calendar_event) parts.push(`  last_calendar_event: [${entityRefs.last_calendar_event.id.slice(0, 12)}] "${entityRefs.last_calendar_event.title}" (${entityRefs.last_calendar_event.start})`);
-    if (entityRefs.last_reminder) parts.push(`  last_reminder: [${entityRefs.last_reminder.id.slice(0, 8)}] "${entityRefs.last_reminder.title}" (fire_at: ${entityRefs.last_reminder.fire_at})`);
+    if (entityRefs.last_task) parts.push(`  last_task: id="${entityRefs.last_task.id}" title="${entityRefs.last_task.title}"`);
+    if (entityRefs.last_calendar_event) parts.push(`  last_calendar_event: id="${entityRefs.last_calendar_event.id}" title="${entityRefs.last_calendar_event.title}" (${entityRefs.last_calendar_event.start})`);
+    if (entityRefs.last_reminder) parts.push(`  last_reminder: id="${entityRefs.last_reminder.id}" title="${entityRefs.last_reminder.title}" (fire_at: ${entityRefs.last_reminder.fire_at})`);
     if (parts.length > 0) entityRefsText = `\n\nLAST REFERENCED ENTITIES:\n${parts.join('\n')}`;
   }
+
+  const userTz = process.env.USER_TZ ?? 'UTC';
+  const { getLocalNowIso } = await import('../services/localdate');
+  const localNow = getLocalNowIso(userTz);
 
   const userContent = `${historySection}Context:\n${contextStr}${entityRefsText}
 
@@ -1156,6 +1163,9 @@ ${eventsText}
 
 Today: ${planDate}
 Tomorrow: ${tomorrowDate}
+Current local time: ${localNow} (timezone: ${userTz})
+
+IMPORTANT — All datetime values you return (scheduled_at, start_datetime, end_datetime, etc.) MUST be interpreted in the user's timezone (${userTz}). Return them as naive ISO strings (e.g. "2026-03-14T12:00:00") representing wall-clock time in ${userTz}. The system will handle UTC conversion.
 
 Message: ${userMessage}`;
 

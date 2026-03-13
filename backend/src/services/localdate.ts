@@ -69,3 +69,57 @@ export function getLocalHour(tz?: string): number {
   }
   return now.getHours();
 }
+
+/**
+ * Returns the current local time as ISO 8601 string in the given timezone.
+ * Example: "2026-03-13T14:30:00" (no offset — represents wall-clock time).
+ */
+export function getLocalNowIso(tz?: string): string {
+  const timezone = tz ?? process.env.USER_TZ ?? undefined;
+  const now = new Date();
+  if (timezone) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+    const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
+    return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
+  }
+  return now.toISOString().slice(0, 19);
+}
+
+/**
+ * Interprets a naive ISO datetime (without timezone offset) as being in the
+ * given IANA timezone and returns a UTC ISO string suitable for TIMESTAMPTZ storage.
+ *
+ * If the input already has a timezone offset or 'Z' suffix, it is returned as-is.
+ *
+ * Example: naiveToUtc("2026-03-14T12:00:00", "Asia/Bangkok")
+ *   → "2026-03-14T05:00:00.000Z"  (12:00 Bangkok = 05:00 UTC)
+ */
+export function naiveToUtc(naive: string, tz?: string): string {
+  const timezone = tz ?? process.env.USER_TZ ?? 'UTC';
+  // Already has offset or Z → pass through
+  if (/[+-]\d{2}:\d{2}$/.test(naive) || /Z$/i.test(naive)) return naive;
+
+  // Treat the naive string as a UTC instant to compute the local offset
+  const refUtc = new Date(naive + 'Z');
+  if (isNaN(refUtc.getTime())) return naive; // unparseable — return as-is
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(refUtc);
+  const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+
+  // offset = localTime - utcTime
+  const offsetMs = localAsUtcMs - refUtc.getTime();
+  // The user meant this datetime in their local timezone → UTC = naive - offset
+  const correctedUtc = new Date(refUtc.getTime() - offsetMs);
+  return correctedUtc.toISOString();
+}

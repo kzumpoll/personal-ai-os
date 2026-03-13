@@ -219,7 +219,7 @@ async function main() {
   console.log('  db:   connected ✓');
 
   // Google Calendar — detailed startup log
-  console.log('  [CAL v2] build marker — calendar write support active');
+  console.log('  calendar: write support active');
   const calDiag = await getCalendarDiagnostics();
   if (calDiag.configured) {
     console.log(`  cal:  configured ✓ (${calDiag.event_count ?? 0} events today)`);

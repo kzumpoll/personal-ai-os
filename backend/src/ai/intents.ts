@@ -236,6 +236,12 @@ export interface CalendarCreateEventIntent {
     all_day?: boolean;
     description?: string;
     location?: string;
+    /** When user wants both a calendar event and a reminder (e.g. "call Johan at 10 and remind me 15 min before") */
+    reminder_also?: {
+      title: string;
+      scheduled_at: string;  // ISO 8601
+      draft_message?: string;
+    };
   };
 }
 

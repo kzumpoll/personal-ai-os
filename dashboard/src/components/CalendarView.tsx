@@ -13,6 +13,7 @@ interface Reminder {
   status: string;
   recipient_name: string | null;
   suggested_message: string | null;
+  draft_message: string | null;
 }
 
 interface CalendarEvent {
@@ -246,31 +247,38 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
                   );
                 })}
 
-                {/* Reminder cards */}
+                {/* Reminder cards — taller blocks with title + draft preview */}
                 {dayReminders.map((r) => {
                   const start = getHourMinute(r.scheduled_at);
                   const topOffset = ((start.hour - HOURS[0]) + start.min / 60) * HOUR_HEIGHT;
+                  const draft = r.draft_message ?? r.suggested_message;
+                  const blockHeight = draft ? 42 : 28;
 
                   return (
                     <div
                       key={r.id}
-                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-0.5 cursor-pointer"
+                      className="absolute left-0.5 right-0.5 rounded px-1.5 py-1 cursor-pointer overflow-hidden"
                       style={{
                         top: Math.max(topOffset, 0),
-                        height: 22,
+                        height: blockHeight,
                         background: `${statusColor(r.status)}18`,
                         borderLeft: `2px solid ${statusColor(r.status)}`,
                         fontSize: '10px',
-                        color: statusColor(r.status),
+                        color: 'var(--text)',
                         zIndex: 3,
                       }}
                       onClick={() => setSelectedReminder(r)}
                     >
                       <div className="flex items-center gap-1 truncate">
-                        <Bell size={8} />
-                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px' }}>{fmtTime(r.scheduled_at)}</span>
-                        <span className="truncate">{r.title}</span>
+                        <Bell size={9} style={{ color: statusColor(r.status), flexShrink: 0 }} />
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', color: statusColor(r.status) }}>{fmtTime(r.scheduled_at)}</span>
+                        <span className="font-medium truncate">{r.title}</span>
                       </div>
+                      {draft && (
+                        <div className="truncate mt-0.5" style={{ fontSize: '9px', color: 'var(--text-muted)', paddingLeft: 14 }}>
+                          {draft}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -347,10 +355,10 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{selectedReminder.recipient_name}</p>
               </div>
             )}
-            {selectedReminder.suggested_message && (
+            {(selectedReminder.draft_message ?? selectedReminder.suggested_message) && (
               <div>
                 <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Draft Message</label>
-                <p className="text-sm rounded-lg p-3" style={{ color: 'var(--text)', background: 'var(--bg)', border: '1px solid var(--border)' }}>{selectedReminder.suggested_message}</p>
+                <p className="text-sm rounded-lg p-3" style={{ color: 'var(--text)', background: 'var(--bg)', border: '1px solid var(--border)' }}>{selectedReminder.draft_message ?? selectedReminder.suggested_message}</p>
               </div>
             )}
             {selectedReminder.status === 'pending' && (

@@ -783,15 +783,19 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     case 'create_reminder': {
       const { title, body, scheduled_at, recipient_name, suggested_message, draft_message } = intent.data;
       const { createReminder } = await import('../db/queries/reminders');
+      const { naiveToUtc } = await import('../services/localdate');
       const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
       if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders.' };
       const effectiveDraft = draft_message ?? suggested_message ?? null;
+      const userTz = process.env.USER_TZ ?? 'UTC';
+      // Convert naive datetime (wall-clock in USER_TZ) to UTC for TIMESTAMPTZ storage
+      const scheduledUtc = naiveToUtc(scheduled_at, userTz);
       const reminder = await createReminder({
         chat_id: chatId,
         title,
         body,
-        scheduled_at,
-        timezone: process.env.USER_TZ ?? 'UTC',
+        scheduled_at: scheduledUtc,
+        timezone: userTz,
         recipient_name: recipient_name ?? null,
         suggested_message: suggested_message ?? null,
         draft_message: effectiveDraft,
@@ -803,8 +807,9 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         before_data: null,
         after_data: reminder as unknown as Record<string, unknown>,
       });
-      const when = new Date(scheduled_at).toLocaleString('en-US', {
-        timeZone: process.env.USER_TZ ?? 'UTC',
+      // Display the time in USER_TZ (which should match what the user asked for)
+      const when = new Date(scheduledUtc).toLocaleString('en-US', {
+        timeZone: userTz,
         weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
       });
       let msg = `Reminder set for ${when}`;
@@ -881,13 +886,13 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'calendar_create_event': {
-      console.log('[executor] [CAL v2] calendar_create_event hit, configured:', isCalendarConfigured());
+      console.log('[executor] calendar_create_event hit, configured:', isCalendarConfigured());
       if (!isCalendarConfigured()) {
-        console.error('[executor] [CAL v2] Calendar NOT configured — check GOOGLE_CREDENTIALS_JSON + GOOGLE_TOKEN_JSON');
-        return { success: false, message: '[CAL v2] Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
+        console.error('[executor] Calendar NOT configured — check GOOGLE_CREDENTIALS_JSON + GOOGLE_TOKEN_JSON');
+        return { success: false, message: 'Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
       }
-      const { title, start_datetime, end_datetime, all_day, description, location } = intent.data;
-      console.log('[executor] [CAL v2] creating event:', JSON.stringify({ title, start_datetime, end_datetime, location }));
+      const { title, start_datetime, end_datetime, all_day, description, location, reminder_also } = intent.data;
+      console.log('[executor] creating event:', JSON.stringify({ title, start_datetime, end_datetime, location }));
       const event = await createCalendarEvent({
         title,
         startDateTime: start_datetime,
@@ -907,15 +912,45 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
           after_data: { ...event, calendar_event_id: event.id } as unknown as Record<string, unknown>,
         });
       } catch (logErr) {
-        console.error('[executor] [CAL v2] mutation log failed (create), continuing:', logErr instanceof Error ? logErr.message : logErr);
+        console.error('[executor] mutation log failed (create), continuing:', logErr instanceof Error ? logErr.message : logErr);
       }
-      console.log('[executor] [CAL v2] calendar event inserted');
+      console.log('[executor] calendar event inserted');
       const dateStr = fmtDate(start_datetime.slice(0, 10));
       const timeStr = event.allDay
         ? 'All day'
         : `${formatEventTime(event.start)}–${formatEventTime(event.end)}`;
-      const lines = [`[CAL v2] Added to calendar:`, `${event.title}`, `${dateStr}, ${timeStr}`];
+      const lines = [`Added to calendar:`, `${event.title}`, `${dateStr}, ${timeStr}`];
       if (location) lines.push(location);
+
+      // Compound: also create a reminder if requested
+      if (reminder_also) {
+        try {
+          const { createReminder } = await import('../db/queries/reminders');
+          const { naiveToUtc } = await import('../services/localdate');
+          const userTz = process.env.USER_TZ ?? 'UTC';
+          const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
+          if (chatId) {
+            const scheduledUtc = naiveToUtc(reminder_also.scheduled_at, userTz);
+            await createReminder({
+              chat_id: chatId,
+              title: reminder_also.title,
+              body: reminder_also.title,
+              scheduled_at: scheduledUtc,
+              timezone: userTz,
+              recipient_name: null,
+              suggested_message: null,
+              draft_message: reminder_also.draft_message ?? null,
+            });
+            const reminderWhen = new Date(scheduledUtc).toLocaleString('en-US', {
+              timeZone: userTz, weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+            });
+            lines.push('', `Reminder also set for ${reminderWhen}`);
+          }
+        } catch (remErr) {
+          console.error('[executor] compound reminder creation failed:', remErr instanceof Error ? remErr.message : remErr);
+        }
+      }
+
       return {
         success: true,
         message: lines.join('\n'),
@@ -924,9 +959,9 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'calendar_create_events_bulk': {
-      console.log('[executor] [CAL v2] calendar_create_events_bulk hit, count:', intent.data.events?.length);
+      console.log('[executor] calendar_create_events_bulk hit, count:', intent.data.events?.length);
       if (!isCalendarConfigured()) {
-        return { success: false, message: '[CAL v2] Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
+        return { success: false, message: 'Google Calendar is not configured. Ask the admin to set up calendar credentials.' };
       }
       const events = intent.data.events;
       if (!Array.isArray(events) || events.length === 0) {
@@ -963,22 +998,22 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
                 after_data: { ...result, calendar_event_id: result.id } as unknown as Record<string, unknown>,
               });
             } catch (logErr) {
-              console.error('[executor] [CAL v2] mutation log failed (bulk create), continuing:', logErr instanceof Error ? logErr.message : logErr);
+              console.error('[executor] mutation log failed (bulk create), continuing:', logErr instanceof Error ? logErr.message : logErr);
             }
           } else {
             failed.push(ev.title);
           }
         } catch (err) {
-          console.error('[executor] [CAL v2] bulk create failed for:', ev.title, err instanceof Error ? err.message : err);
+          console.error('[executor] bulk create failed for:', ev.title, err instanceof Error ? err.message : err);
           failed.push(ev.title);
         }
       }
 
-      console.log('[executor] [CAL v2] bulk calendar events inserted:', created.length, 'failed:', failed.length);
+      console.log('[executor] bulk calendar events inserted:', created.length, 'failed:', failed.length);
 
       const lines: string[] = [];
       if (created.length > 0) {
-        lines.push(`[CAL v2] Added ${created.length} event${created.length > 1 ? 's' : ''} to calendar:\n`);
+        lines.push(`Added ${created.length} event${created.length > 1 ? 's' : ''} to calendar:\n`);
         lines.push(...created);
       }
       if (failed.length > 0) {
@@ -1048,7 +1083,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
           after_data: { ...updated, calendar_event_id: targetEvent.id } as unknown as Record<string, unknown>,
         });
       } catch (logErr) {
-        console.error('[executor] [CAL v2] mutation log failed (update), continuing:', logErr instanceof Error ? logErr.message : logErr);
+        console.error('[executor] mutation log failed (update), continuing:', logErr instanceof Error ? logErr.message : logErr);
       }
 
       const changeDesc = new_start_datetime
@@ -1108,7 +1143,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
           before_data: { ...targetEvent, calendar_event_id: targetEvent.id } as unknown as Record<string, unknown>,
         });
       } catch (logErr) {
-        console.error('[executor] [CAL v2] mutation log failed (delete), continuing:', logErr instanceof Error ? logErr.message : logErr);
+        console.error('[executor] mutation log failed (delete), continuing:', logErr instanceof Error ? logErr.message : logErr);
       }
 
       const affectsDate = targetEvent.start.slice(0, 10);

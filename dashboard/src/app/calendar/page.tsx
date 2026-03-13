@@ -13,6 +13,7 @@ interface Reminder {
   status: string;
   recipient_name: string | null;
   suggested_message: string | null;
+  draft_message: string | null;
 }
 
 async function getData(dateParam?: string, view?: string) {
@@ -34,7 +35,7 @@ async function getData(dateParam?: string, view?: string) {
   try {
     // Fetch reminders for range
     const { rows: reminders } = await pool.query<Reminder>(
-      `SELECT id, title, body, scheduled_at, status, recipient_name, suggested_message
+      `SELECT id, title, body, scheduled_at, status, recipient_name, suggested_message, draft_message
        FROM reminders
        WHERE scheduled_at >= $1 AND scheduled_at < $2
        ORDER BY scheduled_at ASC`,
@@ -55,7 +56,7 @@ async function getData(dateParam?: string, view?: string) {
 
     // Upcoming reminders
     const { rows: upcoming } = await pool.query<Reminder>(
-      `SELECT id, title, body, scheduled_at, status, recipient_name, suggested_message
+      `SELECT id, title, body, scheduled_at, status, recipient_name, suggested_message, draft_message
        FROM reminders
        WHERE status IN ('pending', 'snoozed') AND scheduled_at >= NOW()
        ORDER BY scheduled_at ASC LIMIT 20`

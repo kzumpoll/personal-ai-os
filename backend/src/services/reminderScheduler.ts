@@ -15,7 +15,12 @@ import {
 } from '../db/queries/reminders';
 
 function formatReminderMessage(r: Reminder): string {
-  const lines = [`\u{1F514} Reminder: ${r.title}`];
+  const userTz = r.timezone || process.env.USER_TZ || 'UTC';
+  const timeStr = new Date(r.scheduled_at).toLocaleString('en-US', {
+    timeZone: userTz,
+    weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const lines = [`\u{1F514} Reminder: ${r.title}`, `${timeStr}`];
   if (r.body && r.body !== r.title) lines.push('', r.body);
   if (r.recipient_name) lines.push('', `To: ${r.recipient_name}`);
   const draft = r.draft_message ?? r.suggested_message;

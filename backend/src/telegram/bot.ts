@@ -88,6 +88,35 @@ interface PendingImageReply {
 const pendingImageReplies = new Map<number, PendingImageReply>();
 
 // ---------------------------------------------------------------------------
+// Telegram reply sanitizer — strips JSON blocks and code fences from output
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitizes text before sending to Telegram. Ensures we never leak
+ * raw JSON, code fences, or internal debugging markers to the user.
+ */
+function sanitizeTelegramReply(text: string): string {
+  if (!text) return text;
+  let s = text;
+  // Remove markdown code fences with JSON content
+  s = s.replace(/```(?:json)?\s*\n?\{[\s\S]*?\}\s*\n?```/g, '').trim();
+  // If the entire message is a JSON object/array, replace with a fallback
+  if (/^\s*[\[{]/.test(s) && /[\]}]\s*$/.test(s)) {
+    try {
+      JSON.parse(s);
+      // It's valid JSON — don't show it to user
+      console.warn('[sanitize] blocked raw JSON reply:', s.slice(0, 200));
+      return "Done! Let me know if you need anything else.";
+    } catch {
+      // Not valid JSON — probably fine
+    }
+  }
+  // Strip any remaining ```json blocks
+  s = s.replace(/```(?:json)?\n?/g, '').replace(/```/g, '').trim();
+  return s || text;
+}
+
+// ---------------------------------------------------------------------------
 // Day plan helpers
 // ---------------------------------------------------------------------------
 
@@ -512,10 +541,11 @@ function isNegative(lower: string): boolean {
 }
 
 async function handleText(chatId: number, text: string, rawReply: (msg: string) => Promise<unknown>) {
-  // Wrap reply so every bot response is tracked in history automatically
+  // Wrap reply so every bot response is tracked in history and sanitized
   const reply = async (msg: string) => {
-    addToHistory(chatId, 'bot', msg);
-    return rawReply(msg);
+    const safe = sanitizeTelegramReply(msg);
+    addToHistory(chatId, 'bot', safe);
+    return rawReply(safe);
   };
 
   addToHistory(chatId, 'user', text);
@@ -837,7 +867,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       const planDate = getLocalToday();
       const tomorrowDate = getLocalTomorrow();
       const interpreted = await interpretImageMessage(base64, imageMimeType, text, planDate, tomorrowDate);
-      console.log('[bot] [CAL v2] image understanding result:', JSON.stringify(interpreted).slice(0, 300));
+      console.log('[bot] image understanding result:', JSON.stringify(interpreted).slice(0, 300));
 
       if (interpreted.type === 'app_action') {
         if (interpreted.confidence === 'low') {
@@ -1000,8 +1030,8 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       const answerText = intent.text ?? '';
       if (/can'?t.*(create|access|modify|add|schedule).*(calendar|event)/i.test(answerText) ||
           /no.*(access|ability).*(calendar|event)/i.test(answerText)) {
-        console.warn('[bot] [CAL v2] BLOCKED answer claiming no calendar access:', answerText);
-        await reply('[CAL v2] I can create calendar events for you. Try: "add [event] [date] [time]"');
+        console.warn('[bot] BLOCKED answer claiming no calendar access:', answerText);
+        await reply('I can create calendar events for you. Try: "add [event] [date] [time]"');
         return;
       }
       if (intent.needs_tool) {
@@ -1045,8 +1075,8 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         /\b(\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|at\s+\d|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(captureText) &&
         /\b(padel|lunch|dinner|meeting|call|session|appointment|event|brunch|coffee|drinks)\b/i.test(captureText);
       if (intent.capture_type === 'resource' && looksLikeEvent) {
-        console.warn('[bot] [CAL v2] BLOCKED resource capture for calendar-like content:', captureText);
-        await reply('[CAL v2] This looks like a calendar event. Try: "add ' + (intent.content?.slice(0, 40) ?? 'event') + ' to my calendar"');
+        console.warn('[bot] BLOCKED resource capture for calendar-like content:', captureText);
+        await reply('This looks like a calendar event. Try: "add ' + (intent.content?.slice(0, 40) ?? 'event') + ' to my calendar"');
         return;
       }
       await setSession(chatId, {
@@ -1195,7 +1225,9 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
             if (d.id && d.title) setLastReminderRef(chatId, { id: String(d.id), title: String(d.title), fire_at: String(d.scheduled_at ?? '') });
           }
           if (appIntent.intent === 'calendar_create_event' || appIntent.intent === 'calendar_update_event') {
-            if (d.id && d.title) setLastCalendarEventRef(chatId, { id: String(d.id), title: String(d.title), start: String(d.start ?? '') });
+            // Calendar event data is nested under calendarEvent
+            const calEv = (d.calendarEvent ?? d) as Record<string, unknown>;
+            if (calEv.id && calEv.title) setLastCalendarEventRef(chatId, { id: String(calEv.id), title: String(calEv.title), start: String(calEv.start ?? '') });
           }
         }
 
@@ -1471,18 +1503,18 @@ bot.on('photo', async (ctx) => {
 
     } else if (imageIntent === 'understand') {
       // --- Image understanding path (Claude vision) ---
-      console.log('[bot] [CAL v2] routing to image understanding via Claude vision');
+      console.log('[bot] routing to image understanding via Claude vision');
       const base64 = imageBuffer.toString('base64');
       const planDate = getLocalToday();
       const tomorrowDate = getLocalTomorrow();
 
       const intent = await interpretImageMessage(base64, mimeType, caption!, planDate, tomorrowDate);
-      console.log('[bot] [CAL v2] image interpretation result:', JSON.stringify(intent).slice(0, 300));
+      console.log('[bot] image interpretation result:', JSON.stringify(intent).slice(0, 300));
 
       // Route the interpreted intent through the same dispatch as text messages
       if (intent.type === 'app_action') {
         const appIntent = intent.intent;
-        console.log('[bot] [CAL v2] image → app_action/', appIntent.intent, 'confidence:', intent.confidence);
+        console.log('[bot] image → app_action/', appIntent.intent, 'confidence:', intent.confidence);
 
         if (intent.confidence === 'low') {
           await ctx.reply(intent.follow_up_question ?? 'Could you be more specific about what you want from this image?');

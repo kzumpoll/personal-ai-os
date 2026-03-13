@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "migrate": "tsx src/db/migrate.ts",
     "selftest": "tsx src/selftest.ts",
-    "test": "vitest run src/ai/debrief-parser.test.ts",
+    "test": "vitest run",
     "test:all": "vitest run"
   },
   "dependencies": {
