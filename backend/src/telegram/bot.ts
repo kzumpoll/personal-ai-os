@@ -54,7 +54,7 @@ import { getDayPlanByDate, upsertDayPlan, setDayPlanIntentions, setFocusCompleti
 import { generateDayPlan, formatAgendaForBot, diffDayPlans } from '../services/dayplan';
 import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
-import { getLocalToday, getLocalTomorrow } from '../services/localdate';
+import { getLocalToday, getLocalTomorrow, getLocalYesterday } from '../services/localdate';
 import { createWin, getWinsForDate } from '../db/queries/wins';
 
 // ---------------------------------------------------------------------------
@@ -1284,8 +1284,18 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   }
 }
 
-async function startDebrief(chatId: number, reply: (msg: string) => Promise<unknown>) {
-  const { debriefDate, planDate } = determineDebriefDates();
+async function startDebrief(chatId: number, reply: (msg: string) => Promise<unknown>, explicitDebriefDate?: string) {
+  let debriefDate: string;
+  let planDate: string;
+  if (explicitDebriefDate) {
+    // Explicit date: debrief that date, plan the next day
+    debriefDate = explicitDebriefDate;
+    const d = new Date(explicitDebriefDate + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    planDate = d.toISOString().slice(0, 10);
+  } else {
+    ({ debriefDate, planDate } = determineDebriefDates());
+  }
 
   const tasks = await getTasksDueOnOrBefore(planDate, 30);
 
@@ -1628,9 +1638,25 @@ bot.command('start', async (ctx) => {
   );
 });
 
-// Handle /debrief
+// Handle /debrief [optional date]
+// Usage: /debrief (auto) or /debrief 2026-03-12 (specific date)
 bot.command('debrief', async (ctx) => {
-  await startDebrief(ctx.chat.id, (msg) => ctx.reply(msg));
+  const arg = ctx.message.text.replace(/^\/debrief\s*/i, '').trim();
+  let explicitDate: string | undefined;
+  if (arg) {
+    // Accept YYYY-MM-DD or natural like "yesterday", "today"
+    if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+      explicitDate = arg;
+    } else if (/^yesterday$/i.test(arg)) {
+      explicitDate = getLocalYesterday();
+    } else if (/^today$/i.test(arg)) {
+      explicitDate = getLocalToday();
+    } else {
+      await ctx.reply(`Couldn't parse "${arg}" as a date. Use YYYY-MM-DD or "yesterday"/"today".`);
+      return;
+    }
+  }
+  await startDebrief(ctx.chat.id, (msg) => ctx.reply(msg), explicitDate);
 });
 
 // Handle /plan — show or generate today's day plan
