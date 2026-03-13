@@ -383,6 +383,7 @@ function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDa
   const [usdValue, setUsdValue] = useState('');
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const today = new Date().toISOString().slice(0, 10);
   const cryptoHoldings = holdings.filter(h => h.asset_type === 'crypto');
@@ -416,8 +417,9 @@ function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDa
   async function save() {
     if (!assetName || !usdValue) return;
     setSaving(true);
+    setErrorMsg(null);
     try {
-      await fetch('/api/finances/manual-holdings', {
+      const res = await fetch('/api/finances/manual-holdings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -431,34 +433,55 @@ function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDa
           notes: notes || null,
         }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.error ?? `Save failed (${res.status})`);
+        return;
+      }
       resetForm();
       router.refresh();
-    } catch { /* swallow */ }
-    finally { setSaving(false); }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Save failed');
+    } finally { setSaving(false); }
   }
 
   async function deleteHolding(id: string) {
+    setErrorMsg(null);
     try {
-      await fetch('/api/finances/manual-holdings', {
+      const res = await fetch('/api/finances/manual-holdings', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.error ?? `Delete failed (${res.status})`);
+        return;
+      }
       router.refresh();
-    } catch { /* swallow */ }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Delete failed');
+    }
   }
 
   async function duplicateSnapshot() {
     setSaving(true);
+    setErrorMsg(null);
     try {
-      await fetch('/api/finances/manual-holdings', {
+      const res = await fetch('/api/finances/manual-holdings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'duplicate_snapshot' }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setErrorMsg(data.error ?? `Duplicate failed (${res.status})`);
+        return;
+      }
       router.refresh();
-    } catch { /* swallow */ }
-    finally { setSaving(false); }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Duplicate failed');
+    } finally { setSaving(false); }
   }
 
   function renderGroup(label: string, items: ManualHolding[], color: string) {
@@ -533,6 +556,8 @@ function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDa
         </div>
       </div>
 
+      {errorMsg && !showForm && <p className="text-xs mb-2" style={{ color: 'var(--red)' }}>{errorMsg}</p>}
+
       {holdings.length === 0 && !showForm && (
         <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>No holdings recorded. Add one to get started.</p>
       )}
@@ -584,6 +609,7 @@ function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDa
               {saving ? 'Saving...' : 'Save'}
             </button>
           </div>
+          {errorMsg && <p className="text-xs mt-2" style={{ color: 'var(--red)' }}>{errorMsg}</p>}
         </div>
       )}
     </div>
