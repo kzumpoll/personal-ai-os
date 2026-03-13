@@ -54,6 +54,28 @@ async function getData(dateParam?: string, view?: string) {
       }
     }
 
+    // Fetch daily ROI reviews and inject as synthetic events at 08:00
+    const { rows: roiReviews } = await pool.query<{ period_start: string; content: Record<string, unknown> }>(
+      `SELECT period_start, content FROM reviews
+       WHERE review_type = 'daily_roi' AND period_start >= $1 AND period_start < $2
+       ORDER BY period_start ASC`,
+      [startStr, endStr]
+    );
+    for (const roi of roiReviews) {
+      const dayStr = typeof roi.period_start === 'string' ? roi.period_start.slice(0, 10) : String(roi.period_start).slice(0, 10);
+      if (!eventsMap[dayStr]) eventsMap[dayStr] = [];
+      const preview = typeof roi.content?.generated_list === 'string'
+        ? roi.content.generated_list.slice(0, 80).replace(/\n/g, ' ') + '...'
+        : 'Daily ROI';
+      eventsMap[dayStr].unshift({
+        id: `roi-${dayStr}`,
+        title: `ROI: ${preview}`,
+        start: `${dayStr}T08:00:00`,
+        end: `${dayStr}T08:15:00`,
+        allDay: false,
+      });
+    }
+
     // Upcoming reminders
     const { rows: upcoming } = await pool.query<Reminder>(
       `SELECT id, title, body, scheduled_at, status, recipient_name, suggested_message, draft_message
