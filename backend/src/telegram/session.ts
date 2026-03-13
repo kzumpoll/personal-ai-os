@@ -102,6 +102,31 @@ export function getEntityRefs(chatId: number): EntityRef {
   return entityRefs.get(chatId) ?? {};
 }
 
+// ---------------------------------------------------------------------------
+// Pending action tracking — stores the last executed action per chat so
+// conversational corrections ("no remove that, make it a reminder") work.
+// In-memory only — corrections are only valid within the same conversation.
+// ---------------------------------------------------------------------------
+
+interface PendingAction {
+  intent: Intent;
+  result: { success: boolean; message: string; data?: unknown };
+}
+
+const pendingActions = new Map<number, PendingAction>();
+
+export function setPendingAction(chatId: number, action: PendingAction): void {
+  pendingActions.set(chatId, action);
+}
+
+export function getPendingAction(chatId: number): PendingAction | null {
+  return pendingActions.get(chatId) ?? null;
+}
+
+export function clearPendingAction(chatId: number): void {
+  pendingActions.delete(chatId);
+}
+
 export type SessionState =
   | { state: 'idle' }
   | {
@@ -179,6 +204,14 @@ export type SessionState =
   | {
       // ROI: user wants to set the generated top 3 as MIT/P1/P2
       state: 'roi_set_focus';
+    }
+  | {
+      // Stores the last executed action so corrections like "no remove that, make it a reminder" work
+      state: 'pending_action';
+      lastAction: {
+        intent: Intent;
+        result: { success: boolean; message: string; data?: unknown };
+      };
     };
 
 // ---------------------------------------------------------------------------

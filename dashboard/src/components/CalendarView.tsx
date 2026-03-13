@@ -43,14 +43,31 @@ function toDate(v: string | Date): Date {
   return v instanceof Date ? v : new Date(v);
 }
 
+const USER_TZ = process.env.NEXT_PUBLIC_USER_TZ || process.env.USER_TZ || 'Asia/Makassar';
+
 function fmtTime(isoStr: string | Date): string {
-  try { return format(toDate(isoStr), 'HH:mm'); } catch { return ''; }
+  try {
+    const d = toDate(isoStr);
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: USER_TZ,
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(d);
+    const h = parts.find(p => p.type === 'hour')?.value ?? '00';
+    const m = parts.find(p => p.type === 'minute')?.value ?? '00';
+    return `${h}:${m}`;
+  } catch { return ''; }
 }
 
 function getHourMinute(isoStr: string | Date): { hour: number; min: number } {
   try {
     const d = toDate(isoStr);
-    return { hour: d.getHours(), min: d.getMinutes() };
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: USER_TZ,
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(d);
+    const hour = Number(parts.find(p => p.type === 'hour')?.value ?? 0) % 24;
+    const min = Number(parts.find(p => p.type === 'minute')?.value ?? 0);
+    return { hour, min };
   } catch {
     return { hour: 0, min: 0 };
   }

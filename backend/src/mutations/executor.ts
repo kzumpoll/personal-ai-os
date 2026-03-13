@@ -9,6 +9,7 @@ import {
   getTasksForDate,
   getTaskByTitle,
   getTaskById,
+  getTaskByIdPrefix,
 } from '../db/queries/tasks';
 import { createThought, getAllThoughts } from '../db/queries/thoughts';
 import { createIdea, getAllIdeas, getIdeaById, getIdeaByContent, updateIdeaNextStep, linkIdeaToProject } from '../db/queries/ideas';
@@ -34,6 +35,23 @@ export interface MutationResult {
   success: boolean;
   message: string;
   data?: unknown;
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Resolve a task by ID (full UUID or short prefix) or title. */
+async function resolveTask(taskId?: string, taskTitle?: string) {
+  if (taskId) {
+    if (UUID_REGEX.test(taskId)) {
+      const task = await getTaskById(taskId);
+      if (task) return task;
+    }
+    // Short prefix fallback
+    const task = await getTaskByIdPrefix(taskId);
+    if (task) return task;
+  }
+  if (taskTitle) return getTaskByTitle(taskTitle);
+  return null;
 }
 
 /**
@@ -218,14 +236,8 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
     case 'complete_task': {
       console.log('[complete_task] start | task_id:', intent.data.task_id ?? '(none)', '| task_title:', intent.data.task_title ?? '(none)');
-      let task = null;
-      if (intent.data.task_id) {
-        task = await getTaskById(intent.data.task_id);
-        console.log('[complete_task] getTaskById →', task ? `"${task.title}" (${task.status})` : 'not found');
-      } else if (intent.data.task_title) {
-        task = await getTaskByTitle(intent.data.task_title);
-        console.log('[complete_task] getTaskByTitle →', task ? `"${task.title}" (${task.status})` : 'not found');
-      }
+      const task = await resolveTask(intent.data.task_id, intent.data.task_title);
+      console.log('[complete_task] resolved →', task ? `"${task.title}" (${task.status})` : 'not found');
       if (!task) {
         console.log('[complete_task] no task matched — returning error');
         return { success: false, message: 'Task not found. Try "show tasks" to see the current list.' };
@@ -253,12 +265,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
     }
 
     case 'move_task_date': {
-      let task = null;
-      if (intent.data.task_id) {
-        task = await getTaskById(intent.data.task_id);
-      } else if (intent.data.task_title) {
-        task = await getTaskByTitle(intent.data.task_title);
-      }
+      const task = await resolveTask(intent.data.task_id, intent.data.task_title);
       if (!task) return { success: false, message: 'Task not found.' };
 
       const before = { ...task };
@@ -764,9 +771,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
     case 'update_task_description': {
       const { task_id, task_title, description } = intent.data;
-      let task = null;
-      if (task_id) task = await getTaskById(task_id);
-      if (!task && task_title) task = await getTaskByTitle(task_title);
+      const task = await resolveTask(task_id, task_title);
       if (!task) return { success: false, message: 'Task not found. Try listing your tasks first.' };
       const updated = await updateTask(task.id, { description });
       if (!updated) return { success: false, message: `Could not update description for "${task.title}".` };

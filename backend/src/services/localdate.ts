@@ -123,3 +123,61 @@ export function naiveToUtc(naive: string, tz?: string): string {
   const correctedUtc = new Date(refUtc.getTime() - offsetMs);
   return correctedUtc.toISOString();
 }
+
+/** Alias for naiveToUtc — clearer name for callsites. */
+export const localNaiveToUtcIso = naiveToUtc;
+
+/**
+ * Converts a UTC ISO string to local date/time parts in the given timezone.
+ * Returns { year, month, day, hour, minute, second, weekday } for flexible formatting.
+ */
+export function utcIsoToLocalParts(utcIso: string, tz?: string): {
+  year: number; month: number; day: number;
+  hour: number; minute: number; second: number;
+  weekday: string; dateStr: string; timeStr: string;
+} {
+  const timezone = tz ?? process.env.USER_TZ ?? 'UTC';
+  const d = new Date(utcIso);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    weekday: 'short',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '';
+  const year = Number(get('year'));
+  const month = Number(get('month'));
+  const day = Number(get('day'));
+  const hour = Number(get('hour')) % 24;
+  const minute = Number(get('minute'));
+  const second = Number(get('second'));
+  const weekday = get('weekday');
+  const dateStr = `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
+  const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return { year, month, day, hour, minute, second, weekday, dateStr, timeStr };
+}
+
+/**
+ * Formats a UTC time range as local time in USER_TZ.
+ * Example: formatLocalTimeRange("2026-03-14T03:00:00Z", "2026-03-14T04:00:00Z", "Asia/Makassar")
+ *   → "11:00–12:00"
+ */
+export function formatLocalTimeRange(startUtc: string, endUtc: string, tz?: string): string {
+  const s = utcIsoToLocalParts(startUtc, tz);
+  const e = utcIsoToLocalParts(endUtc, tz);
+  return `${s.timeStr}–${e.timeStr}`;
+}
+
+/**
+ * Formats a UTC ISO string as a human-readable local datetime.
+ * Example: "Sat Mar 14, 12:00 PM"
+ */
+export function formatLocalDateTime(utcIso: string, tz?: string): string {
+  const timezone = tz ?? process.env.USER_TZ ?? 'UTC';
+  return new Date(utcIso).toLocaleString('en-US', {
+    timeZone: timezone,
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}

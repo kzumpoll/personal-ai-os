@@ -1050,7 +1050,14 @@ Calendar intent rules:
 - For updates with multiple possible matches: set confidence to "medium" and confirm_needed:true
 - Calendar actions use keywords: add, schedule, create, block, book → create; move, change, reschedule, push → update; cancel, remove, delete → delete
 - COMPOUND: "Tomorrow 10:00 call Johan and remind me 15 min before" → calendar_create_event with reminder_also (reminder at 09:45). Use this whenever the user asks for BOTH an event AND a reminder in one message.
-- CORRECTION: If the user just created a calendar event and says "no remove that, it should be a reminder" or similar, delete the last calendar event (use last_calendar_event from context) AND create a reminder. Return calendar_delete_event for the old event. If unsure, use clarify with options: ["Replace with reminder", "Keep both"].
+- CORRECTION: When the user corrects a previous action (LAST ACTION in context), handle it naturally:
+  - "no remove that, it should be a reminder" → delete the last entity + create a reminder with same details
+  - "no don't add to calendar" → calendar_delete_event for the last calendar event
+  - "make that a reminder instead" → delete last calendar event + create_reminder with same time/title
+  - "actually cancel that" → undo the last action (delete event/reminder/task)
+  - "ask first" / "confirm first" → note: the system will handle future confirmation changes
+  If LAST ACTION context exists, use its entity_id to target the correction. If unsure, use clarify with options.
+- AMBIGUITY between reminder and calendar: If the user's request could be either (e.g. "add call with Johan at 10"), prefer calendar_create_event but return type "clarify" with options: ["Calendar event", "Telegram reminder", "Both"] — ONLY when the intent is genuinely ambiguous. Clear signals: "remind me" → reminder; "add to calendar/schedule" → calendar event.
 
 Reminder intent rules:
 - "remind me to call mom tomorrow at 3pm" → create_reminder with title "Call mom", scheduled_at tomorrow 15:00, HIGH, confirm:false
@@ -1108,6 +1115,13 @@ export interface EntityRefs {
   last_reminder?: { id: string; title: string; fire_at: string } | null;
 }
 
+export interface PendingActionContext {
+  intentType: string;
+  summary: string;
+  entityId?: string;
+  entityTitle?: string;
+}
+
 export async function interpretUserIntent(
   userMessage: string,
   context: ContextPack,
@@ -1117,6 +1131,7 @@ export async function interpretUserIntent(
   planDate: string,
   tomorrowDate: string,
   entityRefs?: EntityRefs,
+  pendingAction?: PendingActionContext | null,
 ): Promise<UserIntent> {
   const contextStr = contextPackToString(context);
 
@@ -1149,11 +1164,19 @@ export async function interpretUserIntent(
     if (parts.length > 0) entityRefsText = `\n\nLAST REFERENCED ENTITIES:\n${parts.join('\n')}`;
   }
 
+  let pendingActionText = '';
+  if (pendingAction) {
+    pendingActionText = `\n\nLAST ACTION (just executed):\n  type: ${pendingAction.intentType}\n  summary: "${pendingAction.summary}"`;
+    if (pendingAction.entityId) pendingActionText += `\n  entity_id: "${pendingAction.entityId}"`;
+    if (pendingAction.entityTitle) pendingActionText += `\n  entity_title: "${pendingAction.entityTitle}"`;
+    pendingActionText += `\nIf the user is correcting this action (e.g. "no remove that, make it a reminder instead"), handle the correction by undoing or replacing the action.`;
+  }
+
   const userTz = process.env.USER_TZ ?? 'UTC';
   const { getLocalNowIso } = await import('../services/localdate');
   const localNow = getLocalNowIso(userTz);
 
-  const userContent = `${historySection}Context:\n${contextStr}${entityRefsText}
+  const userContent = `${historySection}Context:\n${contextStr}${entityRefsText}${pendingActionText}
 
 Day plan for ${planDate}:
 ${scheduleText}

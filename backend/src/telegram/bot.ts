@@ -41,6 +41,8 @@ import {
   setLastCalendarEventRef,
   setLastReminderRef,
   getEntityRefs,
+  setPendingAction,
+  getPendingAction,
 } from './session';
 import { getFilePath, downloadVoiceNote, transcribeAudio } from './voice';
 import { editImage, isImageEditConfigured } from '../services/imageEdit';
@@ -949,7 +951,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
   // One LLM call determines what the user wants to do semantically.
   // Dispatch is deterministic from the returned UserIntent type.
 
-  console.log('[bot] [v2] incoming message:', JSON.stringify(text.slice(0, 200)));
+  console.log('[bot] incoming message:', JSON.stringify(text.slice(0, 200)));
 
   const planDate = /\btomorrow\b/.test(lower) ? getLocalTomorrow() : getLocalToday();
 
@@ -990,17 +992,31 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
   console.log('[bot] interpreting intent for chat', chatId);
   const refs = getEntityRefs(chatId);
+
+  // Build pending action context for correction support
+  const lastPendingAction = getPendingAction(chatId);
+  let pendingActionCtx: import('../ai/claude').PendingActionContext | null = null;
+  if (lastPendingAction) {
+    const d = lastPendingAction.result.data as Record<string, unknown> | undefined;
+    pendingActionCtx = {
+      intentType: lastPendingAction.intent.intent,
+      summary: lastPendingAction.result.message.slice(0, 120),
+      entityId: d?.id ? String(d.id) : d?.calendarEvent ? String((d.calendarEvent as Record<string, unknown>).id ?? '') : undefined,
+      entityTitle: d?.title ? String(d.title) : d?.calendarEvent ? String((d.calendarEvent as Record<string, unknown>).title ?? '') : undefined,
+    };
+  }
+
   const intent = await interpretUserIntent(
     text, ctx, getHistory(chatId),
     plan?.schedule ?? [], calendarEventsForPlan, planDate, getLocalTomorrow(),
-    refs
+    refs, pendingActionCtx
   );
-  console.log('[bot] [v2] interpreter result:', intent.type, intent.type === 'app_action' ? intent.intent.intent : '');
+  console.log('[bot] interpreter result:', intent.type, intent.type === 'app_action' ? intent.intent.intent : '');
 
   switch (intent.type) {
     case 'day_plan_mutation': {
       const mutation = intent.mutation;
-      console.log('[bot] [v2] dispatching: day_plan_mutation/', mutation.type);
+      console.log('[bot] dispatching: day_plan_mutation/', mutation.type);
       const needsSchedule = (
         mutation.type === 'show' ||
         mutation.type === 'remove_event' ||
@@ -1025,7 +1041,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     }
 
     case 'answer': {
-      console.log('[bot] [v2] dispatching: answer', intent.needs_tool ? `(tool: ${intent.needs_tool})` : '');
+      console.log('[bot] dispatching: answer', intent.needs_tool ? `(tool: ${intent.needs_tool})` : '');
       // Guardrail: block the LLM from claiming it can't access Google Calendar
       const answerText = intent.text ?? '';
       if (/can'?t.*(create|access|modify|add|schedule).*(calendar|event)/i.test(answerText) ||
@@ -1045,12 +1061,12 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     }
 
     case 'casual':
-      console.log('[bot] [v2] dispatching: casual');
+      console.log('[bot] dispatching: casual');
       await reply(intent.reply);
       return;
 
     case 'clarify': {
-      console.log('[bot] [v2] dispatching: clarify');
+      console.log('[bot] dispatching: clarify');
       if (intent.options && intent.options.length > 0) {
         const buttons = intent.options.map((opt: string) =>
           Markup.button.callback(opt, `clarify_opt:${opt.slice(0, 40)}`)
@@ -1068,7 +1084,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
     }
 
     case 'capture': {
-      console.log('[bot] [v2] dispatching: capture/', intent.capture_type);
+      console.log('[bot] dispatching: capture/', intent.capture_type);
       // Guardrail: if this looks like a calendar event, don't capture it as a resource
       const captureText = intent.content?.toLowerCase() ?? '';
       const looksLikeEvent =
@@ -1090,7 +1106,7 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
 
     case 'app_action': {
       const appIntent = intent.intent;
-      console.log('[bot] [v2] dispatching: app_action/', appIntent.intent, 'confidence:', intent.confidence);
+      console.log('[bot] dispatching: app_action/', appIntent.intent, 'confidence:', intent.confidence);
 
       if (intent.confidence === 'low') {
         await reply(intent.follow_up_question ?? 'Could you be more specific?');
@@ -1214,6 +1230,11 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         }
 
         await reply(result.message);
+
+        // Store pending action for correction support ("no remove that, make it a reminder")
+        if (result.success) {
+          setPendingAction(chatId, { intent: appIntent, result });
+        }
 
         // Track entity references for follow-up resolution ("that one", "yeah that")
         if (result.success && result.data && typeof result.data === 'object') {
