@@ -172,10 +172,10 @@ export default function FinancesView({ categories, uncategorized, recentTransact
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
-            <Bitcoin size={14} style={{ color: 'var(--yellow)' }} />
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Crypto</span>
+            <Wallet size={14} style={{ color: 'var(--cyan)' }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Cash</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: 'var(--yellow)' }}>{fmtUsd(manualCryptoTotal)}</p>
+          <p className="text-lg font-medium" style={{ color: 'var(--cyan)' }}>{fmtUsd(cashTotal)}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
@@ -186,10 +186,10 @@ export default function FinancesView({ categories, uncategorized, recentTransact
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
-            <Wallet size={14} style={{ color: 'var(--cyan)' }} />
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Cash (Banks)</span>
+            <Bitcoin size={14} style={{ color: 'var(--yellow)' }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Crypto</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: 'var(--cyan)' }}>{fmtUsd(cashTotal)}</p>
+          <p className="text-lg font-medium" style={{ color: 'var(--yellow)' }}>{fmtUsd(manualCryptoTotal)}</p>
         </div>
       </div>
 
