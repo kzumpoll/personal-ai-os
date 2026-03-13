@@ -37,13 +37,18 @@ interface Props {
 const HOURS = Array.from({ length: 16 }, (_, i) => i + 7); // 7:00 to 22:00
 const HOUR_HEIGHT = 56; // px per hour row
 
-function fmtTime(isoStr: string): string {
-  try { return format(new Date(isoStr), 'HH:mm'); } catch { return ''; }
+/** Coerce value to Date — handles both string and Date (from RSC serialization). */
+function toDate(v: string | Date): Date {
+  return v instanceof Date ? v : new Date(v);
 }
 
-function getHourMinute(isoStr: string): { hour: number; min: number } {
+function fmtTime(isoStr: string | Date): string {
+  try { return format(toDate(isoStr), 'HH:mm'); } catch { return ''; }
+}
+
+function getHourMinute(isoStr: string | Date): { hour: number; min: number } {
   try {
-    const d = new Date(isoStr);
+    const d = toDate(isoStr);
     return { hour: d.getHours(), min: d.getMinutes() };
   } catch {
     return { hour: 0, min: 0 };
@@ -88,7 +93,9 @@ export default function CalendarView({ reminders, eventsMap, upcoming, today, vi
   // Group reminders by date
   const remindersByDate: Record<string, Reminder[]> = {};
   for (const r of reminders) {
-    const d = r.scheduled_at.slice(0, 10);
+    // scheduled_at may arrive as a Date object (RSC serialization) or string
+    const raw = r.scheduled_at;
+    const d = typeof raw === 'string' ? raw.slice(0, 10) : format(new Date(raw), 'yyyy-MM-dd');
     if (!remindersByDate[d]) remindersByDate[d] = [];
     remindersByDate[d].push(r);
   }
