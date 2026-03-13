@@ -35,14 +35,6 @@ interface BalanceSnapshot {
   notes: string | null;
 }
 
-interface CryptoHolding {
-  id: string;
-  platform: string;
-  usd_value: number;
-  updated_at: string;
-  notes: string | null;
-}
-
 interface ManualHolding {
   id: string;
   as_of_date: string;
@@ -77,7 +69,6 @@ async function getData() {
     spendByCategory: [] as SpendRow[],
     netFlow: { income: 0, expenses: 0, net: 0, income_usd: 0, expenses_usd: 0, net_usd: 0 },
     snapshots: [] as BalanceSnapshot[],
-    cryptoHoldings: [] as CryptoHolding[],
     manualHoldings: [] as ManualHolding[],
     manualHoldingsDate: null as string | null,
     fxRates: [] as FxRate[],
@@ -88,7 +79,7 @@ async function getData() {
     const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
 
-    const [categoriesRes, uncategorizedRes, recentRes, spendRes, netFlowRes, snapshotsRes, cryptoRes, manualRes, fxRes] = await Promise.all([
+    const [categoriesRes, uncategorizedRes, recentRes, spendRes, netFlowRes, snapshotsRes, manualRes, fxRes] = await Promise.all([
       pool.query<Category>('SELECT * FROM finance_categories ORDER BY is_income, name'),
       pool.query<Transaction>(
         `SELECT t.*, c.name as category_name
@@ -130,7 +121,6 @@ async function getData() {
         [startOfMonth, endOfMonth]
       ),
       pool.query<BalanceSnapshot>('SELECT *, balance_usd FROM finance_balance_snapshots ORDER BY date DESC, account ASC'),
-      pool.query<CryptoHolding>('SELECT * FROM crypto_holdings ORDER BY usd_value DESC'),
       pool.query<ManualHolding>(
         `SELECT * FROM finance_manual_holdings
          WHERE as_of_date = (SELECT MAX(as_of_date) FROM finance_manual_holdings)
@@ -151,7 +141,6 @@ async function getData() {
       spendByCategory: spendRes.rows.map(r => ({ ...r, total: parseFloat(String(r.total)), total_usd: parseFloat(String(r.total_usd)) })),
       netFlow: { income, expenses, net: income - expenses, income_usd, expenses_usd, net_usd: income_usd - expenses_usd },
       snapshots: snapshotsRes.rows,
-      cryptoHoldings: cryptoRes.rows,
       manualHoldings: manualRes.rows,
       manualHoldingsDate: manualRes.rows[0]?.as_of_date ?? null,
       fxRates: fxRes.rows,

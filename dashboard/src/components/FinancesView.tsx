@@ -35,14 +35,6 @@ interface BalanceSnapshot {
   notes: string | null;
 }
 
-interface CryptoHolding {
-  id: string;
-  platform: string;
-  usd_value: number;
-  updated_at: string;
-  notes: string | null;
-}
-
 interface ManualHolding {
   id: string;
   as_of_date: string;
@@ -76,13 +68,12 @@ interface Props {
   spendByCategory: SpendRow[];
   netFlow: { income: number; expenses: number; net: number; income_usd: number; expenses_usd: number; net_usd: number };
   snapshots: BalanceSnapshot[];
-  cryptoHoldings: CryptoHolding[];
   manualHoldings: ManualHolding[];
   manualHoldingsDate: string | null;
   fxRates: FxRate[];
 }
 
-type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'crypto' | 'holdings' | 'fx';
+type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'holdings' | 'fx';
 
 function fmtUsd(amount: number): string {
   return `$ ${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -101,14 +92,16 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
   );
 }
 
-export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots, cryptoHoldings, manualHoldings, manualHoldingsDate, fxRates }: Props) {
+export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots, manualHoldings, manualHoldingsDate, fxRates }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>(uncategorized.length > 0 ? 'inbox' : 'transactions');
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const cryptoTotal = cryptoHoldings.reduce((sum, h) => sum + Number(h.usd_value), 0);
+  const manualCryptoTotal = manualHoldings.filter(h => h.asset_type === 'crypto').reduce((sum, h) => sum + Number(h.usd_value), 0);
+  const manualStockTotal = manualHoldings.filter(h => h.asset_type === 'stock').reduce((sum, h) => sum + Number(h.usd_value), 0);
+  const cashTotal = snapshots.reduce((sum, s) => sum + Number(s.balance_usd ?? 0), 0);
 
   async function handleUpload(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -146,7 +139,6 @@ export default function FinancesView({ categories, uncategorized, recentTransact
     { key: 'transactions', label: 'Transactions' },
     { key: 'reports', label: 'Reports' },
     { key: 'balances', label: 'Balances' },
-    { key: 'crypto', label: 'Crypto' },
     { key: 'holdings', label: 'Crypto/Stocks' },
     { key: 'fx', label: 'FX Rates' },
   ];
@@ -154,7 +146,7 @@ export default function FinancesView({ categories, uncategorized, recentTransact
   return (
     <div className="flex flex-col gap-6">
       {/* Net flow summary cards — USD */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
             <TrendingUp size={14} style={{ color: 'var(--green)' }} />
@@ -183,7 +175,21 @@ export default function FinancesView({ categories, uncategorized, recentTransact
             <Bitcoin size={14} style={{ color: 'var(--yellow)' }} />
             <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Crypto</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: 'var(--yellow)' }}>{fmtUsd(cryptoTotal)}</p>
+          <p className="text-lg font-medium" style={{ color: 'var(--yellow)' }}>{fmtUsd(manualCryptoTotal)}</p>
+        </div>
+        <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp size={14} style={{ color: 'var(--violet)' }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Stocks</span>
+          </div>
+          <p className="text-lg font-medium" style={{ color: 'var(--violet)' }}>{fmtUsd(manualStockTotal)}</p>
+        </div>
+        <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Wallet size={14} style={{ color: 'var(--cyan)' }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Cash (Banks)</span>
+          </div>
+          <p className="text-lg font-medium" style={{ color: 'var(--cyan)' }}>{fmtUsd(cashTotal)}</p>
         </div>
       </div>
 
@@ -356,113 +362,11 @@ export default function FinancesView({ categories, uncategorized, recentTransact
         </div>
       )}
 
-      {/* Crypto holdings */}
-      {tab === 'crypto' && <CryptoTab holdings={cryptoHoldings} />}
-
       {/* Manual holdings (Crypto/Stocks) */}
       {tab === 'holdings' && <HoldingsTab holdings={manualHoldings} asOfDate={manualHoldingsDate} />}
 
       {/* FX rates */}
       {tab === 'fx' && <FxRatesTab rates={fxRates} />}
-    </div>
-  );
-}
-
-/* ── Crypto Holdings Tab ── */
-function CryptoTab({ holdings }: { holdings: CryptoHolding[] }) {
-  const router = useRouter();
-  const [editing, setEditing] = useState<string | null>(null);
-  const [platform, setPlatform] = useState('');
-  const [usdValue, setUsdValue] = useState('');
-  const [notes, setNotes] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const presets = ['Kraken', 'Phantom', 'Trezor'];
-  const total = holdings.reduce((sum, h) => sum + Number(h.usd_value), 0);
-
-  async function save() {
-    if (!platform || !usdValue) return;
-    setSaving(true);
-    try {
-      await fetch('/api/finances/crypto-holdings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform, usd_value: parseFloat(usdValue), notes: notes || null }),
-      });
-      setPlatform(''); setUsdValue(''); setNotes(''); setEditing(null);
-      router.refresh();
-    } catch { /* swallow */ }
-    finally { setSaving(false); }
-  }
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <SectionLabel>Crypto Holdings (Manual)</SectionLabel>
-        <span className="text-sm font-medium" style={{ color: 'var(--yellow)', fontFamily: "var(--font-mono)" }}>Total: {fmtUsd(total)}</span>
-      </div>
-
-      {holdings.length === 0 && !editing ? (
-        <p className="text-sm mb-4" style={{ color: 'var(--text-faint)' }}>No crypto holdings recorded. Add one below.</p>
-      ) : (
-        <div className="flex flex-col gap-1.5 mb-4">
-          {holdings.map((h) => (
-            <div
-              key={h.id}
-              className="flex items-center gap-3 rounded-lg px-4 py-2.5 cursor-pointer"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
-              onClick={() => { setEditing(h.platform); setPlatform(h.platform); setUsdValue(String(h.usd_value)); setNotes(h.notes ?? ''); }}
-            >
-              <Bitcoin size={14} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
-              <span className="text-sm flex-1" style={{ color: 'var(--text)' }}>{h.platform}</span>
-              {h.notes && <span className="text-xs truncate" style={{ color: 'var(--text-faint)', maxWidth: 200 }}>{h.notes}</span>}
-              <span className="text-sm font-medium shrink-0" style={{ color: 'var(--yellow)', fontFamily: "var(--font-mono)" }}>
-                {fmtUsd(h.usd_value)}
-              </span>
-              <span className="text-xs" style={{ color: 'var(--text-faint)' }}>
-                {new Date(h.updated_at).toLocaleDateString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Add/edit form */}
-      <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-        <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>{editing ? `Update ${editing}` : 'Add crypto holding'}</p>
-        <div className="flex items-center gap-2 mb-2">
-          {presets.map(p => (
-            <button
-              key={p}
-              onClick={() => { setPlatform(p); setEditing(p); }}
-              className="text-xs px-2.5 py-1 rounded"
-              style={{ background: platform === p ? 'rgba(234,179,8,0.15)' : 'var(--surface-3)', color: platform === p ? 'var(--yellow)' : 'var(--text-muted)', cursor: 'pointer', border: '1px solid var(--border)' }}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="text" value={platform} onChange={e => setPlatform(e.target.value)}
-            placeholder="Platform" className="text-xs px-2 py-1.5 rounded flex-1"
-            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
-          />
-          <input
-            type="number" value={usdValue} onChange={e => setUsdValue(e.target.value)}
-            placeholder="USD value" className="text-xs px-2 py-1.5 rounded"
-            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 120 }}
-          />
-          <input
-            type="text" value={notes} onChange={e => setNotes(e.target.value)}
-            placeholder="Notes (optional)" className="text-xs px-2 py-1.5 rounded flex-1"
-            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
-          />
-          <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded" style={{ background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', cursor: 'pointer' }}>
-            {saving ? 'Saving...' : 'Save'}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
