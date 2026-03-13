@@ -43,6 +43,17 @@ interface CryptoHolding {
   notes: string | null;
 }
 
+interface ManualHolding {
+  id: string;
+  as_of_date: string;
+  asset_type: 'crypto' | 'stock';
+  asset_name: string;
+  platform: string;
+  quantity: number | null;
+  usd_value: number;
+  notes: string | null;
+}
+
 interface FxRate {
   id: string;
   date: string;
@@ -66,10 +77,12 @@ interface Props {
   netFlow: { income: number; expenses: number; net: number; income_usd: number; expenses_usd: number; net_usd: number };
   snapshots: BalanceSnapshot[];
   cryptoHoldings: CryptoHolding[];
+  manualHoldings: ManualHolding[];
+  manualHoldingsDate: string | null;
   fxRates: FxRate[];
 }
 
-type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'crypto' | 'fx';
+type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'crypto' | 'holdings' | 'fx';
 
 function fmtUsd(amount: number): string {
   return `$ ${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -88,7 +101,7 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
   );
 }
 
-export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots, cryptoHoldings, fxRates }: Props) {
+export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots, cryptoHoldings, manualHoldings, manualHoldingsDate, fxRates }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>(uncategorized.length > 0 ? 'inbox' : 'transactions');
   const [uploading, setUploading] = useState(false);
@@ -134,6 +147,7 @@ export default function FinancesView({ categories, uncategorized, recentTransact
     { key: 'reports', label: 'Reports' },
     { key: 'balances', label: 'Balances' },
     { key: 'crypto', label: 'Crypto' },
+    { key: 'holdings', label: 'Crypto/Stocks' },
     { key: 'fx', label: 'FX Rates' },
   ];
 
@@ -345,6 +359,9 @@ export default function FinancesView({ categories, uncategorized, recentTransact
       {/* Crypto holdings */}
       {tab === 'crypto' && <CryptoTab holdings={cryptoHoldings} />}
 
+      {/* Manual holdings (Crypto/Stocks) */}
+      {tab === 'holdings' && <HoldingsTab holdings={manualHoldings} asOfDate={manualHoldingsDate} />}
+
       {/* FX rates */}
       {tab === 'fx' && <FxRatesTab rates={fxRates} />}
     </div>
@@ -446,6 +463,225 @@ function CryptoTab({ holdings }: { holdings: CryptoHolding[] }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Manual Holdings Tab (Crypto/Stocks) ── */
+function HoldingsTab({ holdings, asOfDate }: { holdings: ManualHolding[]; asOfDate: string | null }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState<ManualHolding | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [assetType, setAssetType] = useState<'crypto' | 'stock'>('crypto');
+  const [assetName, setAssetName] = useState('');
+  const [platform, setPlatform] = useState('');
+  const [quantity, setQuantity] = useState('');
+  const [usdValue, setUsdValue] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const today = new Date().toISOString().slice(0, 10);
+  const cryptoHoldings = holdings.filter(h => h.asset_type === 'crypto');
+  const stockHoldings = holdings.filter(h => h.asset_type === 'stock');
+  const cryptoTotal = cryptoHoldings.reduce((sum, h) => sum + Number(h.usd_value), 0);
+  const stockTotal = stockHoldings.reduce((sum, h) => sum + Number(h.usd_value), 0);
+  const total = cryptoTotal + stockTotal;
+
+  function startEdit(h: ManualHolding) {
+    setEditing(h);
+    setAssetType(h.asset_type);
+    setAssetName(h.asset_name);
+    setPlatform(h.platform);
+    setQuantity(h.quantity != null ? String(h.quantity) : '');
+    setUsdValue(String(h.usd_value));
+    setNotes(h.notes ?? '');
+    setShowForm(true);
+  }
+
+  function resetForm() {
+    setEditing(null);
+    setAssetType('crypto');
+    setAssetName('');
+    setPlatform('');
+    setQuantity('');
+    setUsdValue('');
+    setNotes('');
+    setShowForm(false);
+  }
+
+  async function save() {
+    if (!assetName || !usdValue) return;
+    setSaving(true);
+    try {
+      await fetch('/api/finances/manual-holdings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: editing?.id,
+          as_of_date: asOfDate ?? today,
+          asset_type: assetType,
+          asset_name: assetName,
+          platform: platform || 'Manual',
+          quantity: quantity ? parseFloat(quantity) : null,
+          usd_value: parseFloat(usdValue),
+          notes: notes || null,
+        }),
+      });
+      resetForm();
+      router.refresh();
+    } catch { /* swallow */ }
+    finally { setSaving(false); }
+  }
+
+  async function deleteHolding(id: string) {
+    try {
+      await fetch('/api/finances/manual-holdings', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      router.refresh();
+    } catch { /* swallow */ }
+  }
+
+  async function duplicateSnapshot() {
+    setSaving(true);
+    try {
+      await fetch('/api/finances/manual-holdings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'duplicate_snapshot' }),
+      });
+      router.refresh();
+    } catch { /* swallow */ }
+    finally { setSaving(false); }
+  }
+
+  function renderGroup(label: string, items: ManualHolding[], color: string) {
+    if (items.length === 0) return null;
+    const groupTotal = items.reduce((sum, h) => sum + Number(h.usd_value), 0);
+    return (
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-2">
+          <SectionLabel color={color}>{label}</SectionLabel>
+          <span className="text-xs font-medium" style={{ color, fontFamily: "var(--font-mono)" }}>{fmtUsd(groupTotal)}</span>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {items.map((h) => (
+            <div
+              key={h.id}
+              className="flex items-center gap-3 rounded-lg px-4 py-2.5 cursor-pointer group"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+              onClick={() => startEdit(h)}
+            >
+              <span className="text-sm font-medium" style={{ color: 'var(--text)', minWidth: 60 }}>{h.asset_name}</span>
+              <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{h.platform}</span>
+              {h.quantity != null && (
+                <span className="text-xs" style={{ color: 'var(--text-muted)', fontFamily: "var(--font-mono)" }}>
+                  {Number(h.quantity).toLocaleString('en-US', { maximumFractionDigits: 8 })}
+                </span>
+              )}
+              {h.notes && <span className="text-xs truncate" style={{ color: 'var(--text-faint)', maxWidth: 160 }}>{h.notes}</span>}
+              <span className="flex-1" />
+              <span className="text-sm font-medium shrink-0" style={{ color, fontFamily: "var(--font-mono)" }}>{fmtUsd(h.usd_value)}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); deleteHolding(h.id); }}
+                className="text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ color: 'var(--red)', cursor: 'pointer' }}
+              >
+                x
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Header with total and actions */}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <SectionLabel>Manual Holdings</SectionLabel>
+          {asOfDate && <span className="text-xs" style={{ color: 'var(--text-faint)' }}>Snapshot: {asOfDate}</span>}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium" style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}>Total: {fmtUsd(total)}</span>
+          {holdings.length > 0 && asOfDate !== today && (
+            <button
+              onClick={duplicateSnapshot}
+              disabled={saving}
+              className="text-xs px-3 py-1.5 rounded flex items-center gap-1"
+              style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}
+            >
+              <RefreshCw size={10} />
+              Duplicate to today
+            </button>
+          )}
+          <button
+            onClick={() => { resetForm(); setShowForm(true); }}
+            className="text-xs px-3 py-1.5 rounded"
+            style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}
+          >
+            + Add holding
+          </button>
+        </div>
+      </div>
+
+      {holdings.length === 0 && !showForm && (
+        <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>No holdings recorded. Add one to get started.</p>
+      )}
+
+      {renderGroup('Crypto', cryptoHoldings, 'var(--yellow)')}
+      {renderGroup('Stocks', stockHoldings, 'var(--green)')}
+
+      {/* Add/edit form */}
+      {showForm && (
+        <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{editing ? `Edit ${editing.asset_name}` : 'Add holding'}</p>
+            <button onClick={resetForm} className="text-xs" style={{ color: 'var(--text-faint)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+          <div className="flex items-center gap-2 mb-2">
+            {(['crypto', 'stock'] as const).map(t => (
+              <button
+                key={t}
+                onClick={() => setAssetType(t)}
+                className="text-xs px-2.5 py-1 rounded"
+                style={{
+                  background: assetType === t ? 'rgba(6,182,212,0.15)' : 'var(--surface-3)',
+                  color: assetType === t ? 'var(--cyan)' : 'var(--text-muted)',
+                  cursor: 'pointer', border: '1px solid var(--border)',
+                }}
+              >
+                {t === 'crypto' ? 'Crypto' : 'Stock'}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="text" value={assetName} onChange={e => setAssetName(e.target.value)}
+              placeholder="Asset (BTC, AAPL)" className="text-xs px-2 py-1.5 rounded"
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 120 }} />
+            <input type="text" value={platform} onChange={e => setPlatform(e.target.value)}
+              placeholder="Platform" className="text-xs px-2 py-1.5 rounded"
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 100 }} />
+            <input type="number" value={quantity} onChange={e => setQuantity(e.target.value)}
+              placeholder="Qty (opt)" className="text-xs px-2 py-1.5 rounded"
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 90 }} />
+            <input type="number" value={usdValue} onChange={e => setUsdValue(e.target.value)}
+              placeholder="USD value" className="text-xs px-2 py-1.5 rounded"
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 110 }} />
+            <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Notes (opt)" className="text-xs px-2 py-1.5 rounded flex-1"
+              style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded"
+              style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
