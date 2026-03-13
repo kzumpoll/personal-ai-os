@@ -774,10 +774,12 @@ or when live external data is needed:
 {
   "type": "answer",
   "text": null,
-  "needs_tool": "weather",
-  "tool_params": { "location": "...", "date": "today" }
+  "needs_tool": "weather" | "web_search",
+  "tool_params": { "location": "...", "date": "today" } | { "query": "search query" }
 }
+Available tools: "weather" (real-time weather), "web_search" (search the internet for current info).
 When needs_tool is set, always set text to null — never fabricate the tool response.
+Use web_search when the user asks about current events, prices, news, or anything requiring live data.
 
 FOR casual:
 { "type": "casual", "reply": "short natural response" }

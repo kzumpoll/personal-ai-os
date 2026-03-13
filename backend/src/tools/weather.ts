@@ -97,7 +97,53 @@ export async function executeToolCall(
       const date = (params.date as string | undefined) ?? 'today';
       return await fetchWeather(location, date);
     }
+    case 'web_search': {
+      const query = (params.query as string | undefined) ?? '';
+      return await webSearch(query);
+    }
     default:
       return `I can help answer questions, but live ${tool} lookup isn't connected yet.`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Web search — DuckDuckGo instant answer + HTML scraping fallback
+// ---------------------------------------------------------------------------
+
+async function webSearch(query: string): Promise<string> {
+  if (!query.trim()) return 'What would you like me to search for?';
+
+  try {
+    // DuckDuckGo instant answer API
+    const encoded = encodeURIComponent(query.trim());
+    const res = await axios.get(`https://api.duckduckgo.com/?q=${encoded}&format=json&no_html=1`, { timeout: 8000 });
+    const data = res.data;
+
+    const parts: string[] = [];
+
+    if (data.AbstractText) {
+      parts.push(data.AbstractText);
+      if (data.AbstractSource) parts.push(`Source: ${data.AbstractSource}`);
+    }
+
+    if (data.Answer) {
+      parts.push(data.Answer);
+    }
+
+    // Related topics as snippets
+    if (Array.isArray(data.RelatedTopics) && data.RelatedTopics.length > 0) {
+      const snippets = data.RelatedTopics
+        .filter((t: Record<string, unknown>) => typeof t.Text === 'string')
+        .slice(0, 5)
+        .map((t: Record<string, unknown>) => `• ${t.Text}`);
+      if (snippets.length > 0) parts.push('\nRelated:\n' + snippets.join('\n'));
+    }
+
+    if (parts.length > 0) return parts.join('\n');
+
+    return `I searched for "${query}" but couldn't find a quick answer. Try rephrasing or ask me something more specific.`;
+  } catch (err) {
+    console.error('[web_search] error:', err instanceof Error ? err.message : err);
+    return `Search for "${query}" failed — try again in a moment.`;
   }
 }
