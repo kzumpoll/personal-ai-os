@@ -138,7 +138,7 @@ async function regeneratePlanFor(
 
   if (!wakeTime) {
     return {
-      agenda: `No wake time set for ${planDate}. Run your daily debrief with a Wake: HH:MM line to generate a plan.`,
+      agenda: `No wake time set for ${planDate}. Quick: /plan 7:30 — or run /debrief for a full debrief + plan.`,
       diff: null,
     };
   }
@@ -163,11 +163,17 @@ async function regeneratePlanFor(
     });
   }
 
+  // Auto-pick MIT/P1/P2: use journal if available, else provisional from tasks
+  const allTasks = [...overdueTasks, ...todayTasks];
+  const provisionalMit = journal?.mit ?? existing?.planned_mit ?? allTasks[0]?.title ?? undefined;
+  const provisionalP1 = journal?.p1 ?? existing?.planned_p1 ?? allTasks[1]?.title ?? undefined;
+  const provisionalP2 = journal?.p2 ?? existing?.planned_p2 ?? allTasks[2]?.title ?? undefined;
+
   // Build task candidates: overdue first (most urgent), then today's tasks.
   // Deduplicate by title and exclude MIT/P1/P2 (already in focus blocks).
-  const focusTitles = new Set([journal?.mit, journal?.p1, journal?.p2].filter(Boolean));
+  const focusTitles = new Set([provisionalMit, provisionalP1, provisionalP2].filter(Boolean));
   const seen = new Set<string>();
-  const otherTasks = [...overdueTasks, ...todayTasks]
+  const otherTasks = allTasks
     .filter((t) => {
       if (focusTitles.has(t.title) || seen.has(t.title)) return false;
       seen.add(t.title);
@@ -178,9 +184,9 @@ async function regeneratePlanFor(
   const { schedule, overflow, work_start } = generateDayPlan({
     wakeTime,
     calendarEvents,
-    mit: journal?.mit ?? undefined,
-    p1: journal?.p1 ?? undefined,
-    p2: journal?.p2 ?? undefined,
+    mit: provisionalMit,
+    p1: provisionalP1,
+    p2: provisionalP2,
     otherTasks,
     ignoredEventIds: ignoredIds,
   });
@@ -1627,13 +1633,28 @@ bot.command('debrief', async (ctx) => {
   await startDebrief(ctx.chat.id, (msg) => ctx.reply(msg));
 });
 
-// Handle /plan — show today's day plan
+// Handle /plan — show or generate today's day plan
+// Usage: /plan (show) or /plan 7:30 (generate with wake time)
 bot.command('plan', async (ctx) => {
   const today = getLocalToday();
+  const arg = ctx.message.text.replace(/^\/plan\s*/i, '').trim();
   try {
+    // If a wake time argument is provided, generate/regenerate the plan
+    if (arg) {
+      const wakeTime = parseTimeInput(arg);
+      if (!wakeTime) {
+        await ctx.reply(`Couldn't parse "${arg}" as a time. Try: /plan 7:30`);
+        return;
+      }
+      const { agenda } = await regeneratePlanFor(today, wakeTime);
+      await ctx.reply(agenda);
+      return;
+    }
+
+    // No argument — show existing plan or offer to generate
     const plan = await getDayPlanByDate(today);
     if (!plan || !plan.schedule.length) {
-      await ctx.reply(`No day plan saved for today (${today}). Run your daily debrief with a Wake: HH:MM to generate one.`);
+      await ctx.reply(`No day plan for today (${today}).\n\nQuick generate: /plan 7:30\nOr run /debrief for a full debrief + plan.`);
     } else {
       await ctx.reply(formatAgendaForBot(plan.schedule, plan.overflow, today, plan));
     }
