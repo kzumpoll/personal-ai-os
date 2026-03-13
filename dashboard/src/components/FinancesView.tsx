@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Upload, Tag, TrendingUp, TrendingDown, Wallet, ChevronDown } from 'lucide-react';
+import { Upload, Tag, TrendingUp, TrendingDown, Wallet, ChevronDown, Bitcoin, RefreshCw } from 'lucide-react';
 
 interface Category {
   id: string;
@@ -31,13 +31,31 @@ interface BalanceSnapshot {
   date: string;
   balance: number;
   currency: string;
+  balance_usd: number | null;
   notes: string | null;
+}
+
+interface CryptoHolding {
+  id: string;
+  platform: string;
+  usd_value: number;
+  updated_at: string;
+  notes: string | null;
+}
+
+interface FxRate {
+  id: string;
+  date: string;
+  currency: string;
+  rate_to_usd: number;
+  is_estimated: boolean;
 }
 
 interface SpendRow {
   name: string;
   color: string;
   total: number;
+  total_usd: number;
 }
 
 interface Props {
@@ -45,13 +63,20 @@ interface Props {
   uncategorized: Transaction[];
   recentTransactions: Transaction[];
   spendByCategory: SpendRow[];
-  netFlow: { income: number; expenses: number; net: number };
+  netFlow: { income: number; expenses: number; net: number; income_usd: number; expenses_usd: number; net_usd: number };
   snapshots: BalanceSnapshot[];
+  cryptoHoldings: CryptoHolding[];
+  fxRates: FxRate[];
 }
 
-type Tab = 'inbox' | 'transactions' | 'reports' | 'balances';
+type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'crypto' | 'fx';
 
-function fmt(amount: number, currency: string = 'AED'): string {
+function fmtUsd(amount: number): string {
+  return `$ ${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmt(amount: number, currency: string = 'USD'): string {
+  if (currency === 'USD') return fmtUsd(amount);
   return `${currency} ${Math.abs(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
@@ -63,12 +88,14 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
   );
 }
 
-export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots }: Props) {
+export default function FinancesView({ categories, uncategorized, recentTransactions, spendByCategory, netFlow, snapshots, cryptoHoldings, fxRates }: Props) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>(uncategorized.length > 0 ? 'inbox' : 'transactions');
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const cryptoTotal = cryptoHoldings.reduce((sum, h) => sum + Number(h.usd_value), 0);
 
   async function handleUpload(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -106,34 +133,43 @@ export default function FinancesView({ categories, uncategorized, recentTransact
     { key: 'transactions', label: 'Transactions' },
     { key: 'reports', label: 'Reports' },
     { key: 'balances', label: 'Balances' },
+    { key: 'crypto', label: 'Crypto' },
+    { key: 'fx', label: 'FX Rates' },
   ];
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Net flow summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      {/* Net flow summary cards — USD */}
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
             <TrendingUp size={14} style={{ color: 'var(--green)' }} />
             <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Income</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: 'var(--green)' }}>{fmt(netFlow.income)}</p>
+          <p className="text-lg font-medium" style={{ color: 'var(--green)' }}>{fmtUsd(netFlow.income_usd)}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
             <TrendingDown size={14} style={{ color: 'var(--red)' }} />
             <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Expenses</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: 'var(--red)' }}>{fmt(netFlow.expenses)}</p>
+          <p className="text-lg font-medium" style={{ color: 'var(--red)' }}>{fmtUsd(netFlow.expenses_usd)}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
-            <Wallet size={14} style={{ color: netFlow.net >= 0 ? 'var(--green)' : 'var(--red)' }} />
+            <Wallet size={14} style={{ color: netFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)' }} />
             <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Net</span>
           </div>
-          <p className="text-lg font-medium" style={{ color: netFlow.net >= 0 ? 'var(--green)' : 'var(--red)' }}>
-            {netFlow.net >= 0 ? '+' : '-'}{fmt(Math.abs(netFlow.net))}
+          <p className="text-lg font-medium" style={{ color: netFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {netFlow.net_usd >= 0 ? '+' : '-'}{fmtUsd(Math.abs(netFlow.net_usd))}
           </p>
+        </div>
+        <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Bitcoin size={14} style={{ color: 'var(--yellow)' }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Crypto</span>
+          </div>
+          <p className="text-lg font-medium" style={{ color: 'var(--yellow)' }}>{fmtUsd(cryptoTotal)}</p>
         </div>
       </div>
 
@@ -174,6 +210,7 @@ export default function FinancesView({ categories, uncategorized, recentTransact
             <option value="USD">USD</option>
             <option value="EUR">EUR</option>
             <option value="GBP">GBP</option>
+            <option value="IDR">IDR</option>
           </select>
           <button type="submit" disabled={uploading} className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded" style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
             <Upload size={12} />
@@ -183,7 +220,7 @@ export default function FinancesView({ categories, uncategorized, recentTransact
         </form>
       )}
 
-      {/* Inbox: uncategorized transactions */}
+      {/* Inbox */}
       {tab === 'inbox' && (
         <div className="flex flex-col gap-1.5">
           {uncategorized.length === 0 ? (
@@ -224,23 +261,23 @@ export default function FinancesView({ categories, uncategorized, recentTransact
         </div>
       )}
 
-      {/* Reports */}
+      {/* Reports — USD */}
       {tab === 'reports' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
-            <SectionLabel>Spend by Category (this month)</SectionLabel>
+            <SectionLabel>Spend by Category — USD (this month)</SectionLabel>
             {spendByCategory.length === 0 ? (
               <p className="text-sm" style={{ color: 'var(--text-faint)' }}>No categorized spending yet.</p>
             ) : (
               <div className="flex flex-col gap-2">
                 {spendByCategory.map((row) => {
-                  const maxTotal = spendByCategory[0]?.total ?? 1;
-                  const pct = Math.round((row.total / maxTotal) * 100);
+                  const maxTotal = spendByCategory[0]?.total_usd ?? 1;
+                  const pct = Math.round((row.total_usd / maxTotal) * 100);
                   return (
                     <div key={row.name}>
                       <div className="flex items-center justify-between mb-1">
                         <span className="text-sm" style={{ color: 'var(--text)' }}>{row.name}</span>
-                        <span className="text-xs font-medium" style={{ color: 'var(--text-muted)', fontFamily: "var(--font-mono)" }}>{fmt(row.total)}</span>
+                        <span className="text-xs font-medium" style={{ color: 'var(--text-muted)', fontFamily: "var(--font-mono)" }}>{fmtUsd(row.total_usd)}</span>
                       </div>
                       <div className="rounded-full h-1.5" style={{ background: 'var(--surface-3)' }}>
                         <div className="rounded-full h-1.5" style={{ width: `${pct}%`, background: row.color || 'var(--cyan)' }} />
@@ -252,20 +289,20 @@ export default function FinancesView({ categories, uncategorized, recentTransact
             )}
           </div>
           <div>
-            <SectionLabel>Monthly Net Flow</SectionLabel>
+            <SectionLabel>Monthly Net Flow — USD</SectionLabel>
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
                 <span className="text-sm" style={{ color: 'var(--text-muted)' }}>Income</span>
-                <span className="text-sm font-medium" style={{ color: 'var(--green)', fontFamily: "var(--font-mono)" }}>+{fmt(netFlow.income)}</span>
+                <span className="text-sm font-medium" style={{ color: 'var(--green)', fontFamily: "var(--font-mono)" }}>+{fmtUsd(netFlow.income_usd)}</span>
               </div>
               <div className="flex items-center justify-between rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
                 <span className="text-sm" style={{ color: 'var(--text-muted)' }}>Expenses</span>
-                <span className="text-sm font-medium" style={{ color: 'var(--red)', fontFamily: "var(--font-mono)" }}>-{fmt(netFlow.expenses)}</span>
+                <span className="text-sm font-medium" style={{ color: 'var(--red)', fontFamily: "var(--font-mono)" }}>-{fmtUsd(netFlow.expenses_usd)}</span>
               </div>
-              <div className="flex items-center justify-between rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: `1px solid ${netFlow.net >= 0 ? 'var(--green)' : 'var(--red)'}` }}>
+              <div className="flex items-center justify-between rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: `1px solid ${netFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)'}` }}>
                 <span className="text-sm font-medium" style={{ color: 'var(--text)' }}>Net</span>
-                <span className="text-sm font-bold" style={{ color: netFlow.net >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: "var(--font-mono)" }}>
-                  {netFlow.net >= 0 ? '+' : ''}{fmt(netFlow.net)}
+                <span className="text-sm font-bold" style={{ color: netFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: "var(--font-mono)" }}>
+                  {netFlow.net_usd >= 0 ? '+' : ''}{fmtUsd(netFlow.net_usd)}
                 </span>
               </div>
             </div>
@@ -293,10 +330,230 @@ export default function FinancesView({ categories, uncategorized, recentTransact
                   <span className="text-sm font-medium shrink-0" style={{ color: s.balance >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: "var(--font-mono)" }}>
                     {fmt(s.balance, s.currency)}
                   </span>
+                  {s.balance_usd != null && s.currency !== 'USD' && (
+                    <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>
+                      ({fmtUsd(s.balance_usd)})
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Crypto holdings */}
+      {tab === 'crypto' && <CryptoTab holdings={cryptoHoldings} />}
+
+      {/* FX rates */}
+      {tab === 'fx' && <FxRatesTab rates={fxRates} />}
+    </div>
+  );
+}
+
+/* ── Crypto Holdings Tab ── */
+function CryptoTab({ holdings }: { holdings: CryptoHolding[] }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [platform, setPlatform] = useState('');
+  const [usdValue, setUsdValue] = useState('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const presets = ['Kraken', 'Phantom', 'Trezor'];
+  const total = holdings.reduce((sum, h) => sum + Number(h.usd_value), 0);
+
+  async function save() {
+    if (!platform || !usdValue) return;
+    setSaving(true);
+    try {
+      await fetch('/api/finances/crypto-holdings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ platform, usd_value: parseFloat(usdValue), notes: notes || null }),
+      });
+      setPlatform(''); setUsdValue(''); setNotes(''); setEditing(null);
+      router.refresh();
+    } catch { /* swallow */ }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <SectionLabel>Crypto Holdings (Manual)</SectionLabel>
+        <span className="text-sm font-medium" style={{ color: 'var(--yellow)', fontFamily: "var(--font-mono)" }}>Total: {fmtUsd(total)}</span>
+      </div>
+
+      {holdings.length === 0 && !editing ? (
+        <p className="text-sm mb-4" style={{ color: 'var(--text-faint)' }}>No crypto holdings recorded. Add one below.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5 mb-4">
+          {holdings.map((h) => (
+            <div
+              key={h.id}
+              className="flex items-center gap-3 rounded-lg px-4 py-2.5 cursor-pointer"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+              onClick={() => { setEditing(h.platform); setPlatform(h.platform); setUsdValue(String(h.usd_value)); setNotes(h.notes ?? ''); }}
+            >
+              <Bitcoin size={14} style={{ color: 'var(--yellow)', flexShrink: 0 }} />
+              <span className="text-sm flex-1" style={{ color: 'var(--text)' }}>{h.platform}</span>
+              {h.notes && <span className="text-xs truncate" style={{ color: 'var(--text-faint)', maxWidth: 200 }}>{h.notes}</span>}
+              <span className="text-sm font-medium shrink-0" style={{ color: 'var(--yellow)', fontFamily: "var(--font-mono)" }}>
+                {fmtUsd(h.usd_value)}
+              </span>
+              <span className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                {new Date(h.updated_at).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add/edit form */}
+      <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>{editing ? `Update ${editing}` : 'Add crypto holding'}</p>
+        <div className="flex items-center gap-2 mb-2">
+          {presets.map(p => (
+            <button
+              key={p}
+              onClick={() => { setPlatform(p); setEditing(p); }}
+              className="text-xs px-2.5 py-1 rounded"
+              style={{ background: platform === p ? 'rgba(234,179,8,0.15)' : 'var(--surface-3)', color: platform === p ? 'var(--yellow)' : 'var(--text-muted)', cursor: 'pointer', border: '1px solid var(--border)' }}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text" value={platform} onChange={e => setPlatform(e.target.value)}
+            placeholder="Platform" className="text-xs px-2 py-1.5 rounded flex-1"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+          />
+          <input
+            type="number" value={usdValue} onChange={e => setUsdValue(e.target.value)}
+            placeholder="USD value" className="text-xs px-2 py-1.5 rounded"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 120 }}
+          />
+          <input
+            type="text" value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Notes (optional)" className="text-xs px-2 py-1.5 rounded flex-1"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
+          />
+          <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded" style={{ background: 'rgba(234,179,8,0.15)', color: 'var(--yellow)', cursor: 'pointer' }}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── FX Rates Tab ── */
+function FxRatesTab({ rates }: { rates: FxRate[] }) {
+  const router = useRouter();
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [currency, setCurrency] = useState('AED');
+  const [rate, setRate] = useState('');
+  const [bulkText, setBulkText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function addSingle() {
+    if (!date || !currency || !rate) return;
+    setSaving(true);
+    try {
+      await fetch('/api/finances/fx-rates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, currency, rate_to_usd: parseFloat(rate) }),
+      });
+      setRate(''); setMsg('Saved');
+      router.refresh();
+    } catch { setMsg('Failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function importBulk() {
+    if (!bulkText.trim()) return;
+    setSaving(true);
+    try {
+      // Parse lines: "date,currency,rate" or "currency,rate" (uses selected date)
+      const parsed = bulkText.trim().split('\n').map(line => {
+        const parts = line.split(/[,\t]+/).map(s => s.trim());
+        if (parts.length >= 3) return { date: parts[0], currency: parts[1], rate_to_usd: parseFloat(parts[2]) };
+        if (parts.length === 2) return { date, currency: parts[0], rate_to_usd: parseFloat(parts[1]) };
+        return null;
+      }).filter((r): r is NonNullable<typeof r> => r !== null && !isNaN(r.rate_to_usd));
+
+      const res = await fetch('/api/finances/fx-rates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rates: parsed }),
+      });
+      const data = await res.json();
+      setMsg(`Imported ${data.imported} rates`);
+      setBulkText('');
+      router.refresh();
+    } catch { setMsg('Import failed'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <SectionLabel>FX Rates (currency units per 1 USD)</SectionLabel>
+
+      {/* Add single rate */}
+      <div className="rounded-lg p-4 mb-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Add rate</p>
+        <div className="flex items-center gap-2">
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="text-xs px-2 py-1.5 rounded"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+          <select value={currency} onChange={e => setCurrency(e.target.value)} className="text-xs px-2 py-1.5 rounded"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+            <option value="AED">AED</option>
+            <option value="EUR">EUR</option>
+            <option value="GBP">GBP</option>
+            <option value="IDR">IDR</option>
+          </select>
+          <input type="number" step="0.000001" value={rate} onChange={e => setRate(e.target.value)}
+            placeholder="Rate to USD" className="text-xs px-2 py-1.5 rounded"
+            style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 130 }} />
+          <button onClick={addSingle} disabled={saving} className="text-xs px-3 py-1.5 rounded flex items-center gap-1"
+            style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
+            <RefreshCw size={10} /> Save
+          </button>
+          {msg && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{msg}</span>}
+        </div>
+      </div>
+
+      {/* Bulk import */}
+      <div className="rounded-lg p-4 mb-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Bulk import (one per line: date,currency,rate or currency,rate)</p>
+        <textarea
+          value={bulkText} onChange={e => setBulkText(e.target.value)}
+          rows={4} className="w-full text-xs px-2 py-1.5 rounded mb-2"
+          placeholder={"AED,3.6725\nEUR,0.92\n2026-03-01,IDR,15800"}
+          style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', fontFamily: 'var(--font-mono)', resize: 'vertical' }}
+        />
+        <button onClick={importBulk} disabled={saving} className="text-xs px-3 py-1.5 rounded"
+          style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
+          Import
+        </button>
+      </div>
+
+      {/* Rate history */}
+      {rates.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {rates.map((r) => (
+            <div key={r.id} className="flex items-center gap-3 rounded-lg px-4 py-2" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)", minWidth: 80 }}>{r.date}</span>
+              <span className="text-xs font-medium" style={{ color: 'var(--text)', minWidth: 40 }}>{r.currency}</span>
+              <span className="text-xs" style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}>{r.rate_to_usd}</span>
+              {r.is_estimated && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: 'rgba(234,179,8,0.1)', color: 'var(--yellow)', fontSize: '9px' }}>est.</span>}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -338,7 +595,6 @@ function InboxRow({ tx, categories, onCategorize }: { tx: Transaction; categorie
               {c.name}
             </button>
           ))}
-          {/* Show other type too, collapsed */}
           {(tx.amount < 0 ? incomeCategories : expenseCategories).length > 0 && (
             <>
               <span className="text-xs self-center px-1" style={{ color: 'var(--text-faint)' }}>|</span>

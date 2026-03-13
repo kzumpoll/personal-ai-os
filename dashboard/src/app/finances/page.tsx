@@ -31,13 +31,31 @@ interface BalanceSnapshot {
   date: string;
   balance: number;
   currency: string;
+  balance_usd: number | null;
   notes: string | null;
+}
+
+interface CryptoHolding {
+  id: string;
+  platform: string;
+  usd_value: number;
+  updated_at: string;
+  notes: string | null;
+}
+
+interface FxRate {
+  id: string;
+  date: string;
+  currency: string;
+  rate_to_usd: number;
+  is_estimated: boolean;
 }
 
 interface SpendRow {
   name: string;
   color: string;
   total: number;
+  total_usd: number;
 }
 
 async function getData() {
@@ -46,8 +64,10 @@ async function getData() {
     uncategorized: [] as Transaction[],
     recentTransactions: [] as Transaction[],
     spendByCategory: [] as SpendRow[],
-    netFlow: { income: 0, expenses: 0, net: 0 },
+    netFlow: { income: 0, expenses: 0, net: 0, income_usd: 0, expenses_usd: 0, net_usd: 0 },
     snapshots: [] as BalanceSnapshot[],
+    cryptoHoldings: [] as CryptoHolding[],
+    fxRates: [] as FxRate[],
   };
 
   try {
@@ -55,7 +75,7 @@ async function getData() {
     const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
     const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
 
-    const [categoriesRes, uncategorizedRes, recentRes, spendRes, netFlowRes, snapshotsRes] = await Promise.all([
+    const [categoriesRes, uncategorizedRes, recentRes, spendRes, netFlowRes, snapshotsRes, cryptoRes, fxRes] = await Promise.all([
       pool.query<Category>('SELECT * FROM finance_categories ORDER BY is_income, name'),
       pool.query<Transaction>(
         `SELECT t.*, c.name as category_name
@@ -71,35 +91,50 @@ async function getData() {
          ORDER BY t.date DESC LIMIT 50`
       ),
       pool.query<SpendRow>(
-        `SELECT c.name, c.color, SUM(ABS(t.amount)) as total
+        `SELECT c.name, c.color, SUM(ABS(t.amount)) as total,
+           COALESCE(SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)), SUM(ABS(t.amount))) as total_usd
          FROM finance_transactions t
          JOIN finance_categories c ON t.category_id = c.id
+         LEFT JOIN LATERAL (
+           SELECT rate_to_usd FROM fx_rates WHERE currency = t.currency AND date <= t.date ORDER BY date DESC LIMIT 1
+         ) fx ON true
          WHERE t.date >= $1 AND t.date <= $2 AND t.is_income = false AND t.status = 'categorized'
          GROUP BY c.name, c.color
-         ORDER BY total DESC`,
+         ORDER BY total_usd DESC`,
         [startOfMonth, endOfMonth]
       ),
       pool.query(
         `SELECT
            COALESCE(SUM(CASE WHEN is_income THEN amount ELSE 0 END), 0) as income,
-           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) ELSE 0 END), 0) as expenses
-         FROM finance_transactions
-         WHERE date >= $1 AND date <= $2 AND status = 'categorized'`,
+           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) ELSE 0 END), 0) as expenses,
+           COALESCE(SUM(CASE WHEN is_income THEN amount / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0) as income_usd,
+           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0) as expenses_usd
+         FROM finance_transactions t
+         LEFT JOIN LATERAL (
+           SELECT rate_to_usd FROM fx_rates WHERE currency = t.currency AND date <= t.date ORDER BY date DESC LIMIT 1
+         ) fx ON true
+         WHERE t.date >= $1 AND t.date <= $2 AND t.status = 'categorized'`,
         [startOfMonth, endOfMonth]
       ),
-      pool.query<BalanceSnapshot>('SELECT * FROM finance_balance_snapshots ORDER BY date DESC, account ASC'),
+      pool.query<BalanceSnapshot>('SELECT *, balance_usd FROM finance_balance_snapshots ORDER BY date DESC, account ASC'),
+      pool.query<CryptoHolding>('SELECT * FROM crypto_holdings ORDER BY usd_value DESC'),
+      pool.query<FxRate>('SELECT * FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50'),
     ]);
 
     const income = parseFloat(netFlowRes.rows[0]?.income ?? '0');
     const expenses = parseFloat(netFlowRes.rows[0]?.expenses ?? '0');
+    const income_usd = parseFloat(netFlowRes.rows[0]?.income_usd ?? '0');
+    const expenses_usd = parseFloat(netFlowRes.rows[0]?.expenses_usd ?? '0');
 
     return {
       categories: categoriesRes.rows,
       uncategorized: uncategorizedRes.rows,
       recentTransactions: recentRes.rows,
-      spendByCategory: spendRes.rows.map(r => ({ ...r, total: parseFloat(String(r.total)) })),
-      netFlow: { income, expenses, net: income - expenses },
+      spendByCategory: spendRes.rows.map(r => ({ ...r, total: parseFloat(String(r.total)), total_usd: parseFloat(String(r.total_usd)) })),
+      netFlow: { income, expenses, net: income - expenses, income_usd, expenses_usd, net_usd: income_usd - expenses_usd },
       snapshots: snapshotsRes.rows,
+      cryptoHoldings: cryptoRes.rows,
+      fxRates: fxRes.rows,
     };
   } catch (err) {
     logDbError('finances', err);
