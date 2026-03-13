@@ -877,6 +877,7 @@ add_idea:            { "intent": "add_idea",            "data": { "content": "..
 add_win:             { "intent": "add_win",             "data": { "content": "...", "entry_date": "YYYY-MM-DD" } }
 add_goal:            { "intent": "add_goal",            "data": { "title": "...", "description": "...", "target_date": "YYYY-MM-DD" } }
 create_resource:     { "intent": "create_resource",     "data": { "title": "...", "content_or_url": "...", "type": "..." } }
+add_manifestation:   { "intent": "add_manifestation",   "data": { "vision": "...", "category": "career|health|relationships|wealth|lifestyle|spiritual|creative|learning|travel|other", "why": "...", "timeframe": "3 months|6 months|1 year|3 years|5 years" } }
 set_idea_next_step:  { "intent": "set_idea_next_step",  "data": { "position": 2, "idea_content": "...", "next_step": "..." } }
 promote_idea_to_project: { "intent": "promote_idea_to_project", "data": { "position": 3, "idea_content": "..." } }
 daily_debrief:       { "intent": "daily_debrief",       "data": {} }

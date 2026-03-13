@@ -19,6 +19,7 @@ export type IntentType =
   | 'add_win'
   | 'add_goal'
   | 'create_resource'
+  | 'add_manifestation'
   | 'calendar_create_event'
   | 'calendar_create_events_bulk'
   | 'calendar_update_event'
@@ -169,6 +170,17 @@ export interface CreateResourceIntent {
     title: string;
     content_or_url?: string;
     type?: string;
+  };
+}
+
+export interface AddManifestationIntent {
+  intent: 'add_manifestation';
+  data: {
+    vision: string;
+    category?: string;
+    why?: string;
+    timeframe?: string;
+    content?: string; // alias for vision from capture flow
   };
 }
 
@@ -334,6 +346,7 @@ export type Intent =
   | AddWinIntent
   | AddGoalIntent
   | CreateResourceIntent
+  | AddManifestationIntent
   | CalendarCreateEventIntent
   | CalendarCreateEventsBulkIntent
   | CalendarUpdateEventIntent

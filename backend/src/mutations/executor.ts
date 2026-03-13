@@ -16,6 +16,7 @@ import { createIdea, getAllIdeas, getIdeaById, getIdeaByContent, updateIdeaNextS
 import { createWin, getAllWins } from '../db/queries/wins';
 import { createGoal, getActiveGoals, getAllGoals } from '../db/queries/goals';
 import { createResource, getAllResources } from '../db/queries/resources';
+import { createManifestation } from '../db/queries/manifestations';
 import { upsertJournal } from '../db/queries/journals';
 import { upsertDayPlan, setDayPlanIntentions } from '../db/queries/day_plans';
 import {
@@ -581,6 +582,27 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         success: true,
         message: `Resource saved: "${resource.title}"`,
         data: resource,
+      };
+    }
+
+    case 'add_manifestation': {
+      const m = await createManifestation({
+        category: intent.data.category ?? 'other',
+        vision: intent.data.vision ?? intent.data.content ?? '',
+        why: intent.data.why,
+        timeframe: intent.data.timeframe,
+      });
+      await logMutation({
+        action: 'create',
+        table_name: 'manifestations',
+        record_id: m.id,
+        before_data: null,
+        after_data: m as unknown as Record<string, unknown>,
+      });
+      return {
+        success: true,
+        message: `Manifestation added: "${m.vision}" (${m.category}${m.timeframe ? `, ${m.timeframe}` : ''})`,
+        data: m,
       };
     }
 
