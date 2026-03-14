@@ -61,55 +61,47 @@ interface SpendRow {
   total_usd: number;
 }
 
-async function getData() {
-  const empty = {
-    categories: [] as Category[],
-    uncategorized: [] as Transaction[],
-    recentTransactions: [] as Transaction[],
-    spendByCategory: [] as SpendRow[],
-    netFlow: { income: 0, expenses: 0, net: 0, income_usd: 0, expenses_usd: 0, net_usd: 0 },
-    snapshots: [] as BalanceSnapshot[],
-    manualHoldings: [] as ManualHolding[],
-    manualHoldingsDate: null as string | null,
-    fxRates: [] as FxRate[],
-  };
-
+// Runs a DB query and returns its rows. On failure, logs the error, returns [] and the error string.
+// This lets one failing query show partial data instead of blanking the whole page.
+async function safeRows<T>(label: string, fn: () => Promise<{ rows: T[] }>): Promise<{ rows: T[]; error: string | null }> {
   try {
-    const now = new Date();
-    const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-    const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
+    const result = await fn();
+    return { rows: result.rows, error: null };
+  } catch (err) {
+    logDbError(`finances/${label}`, err);
+    const code = (err as Record<string, unknown>)?.code;
+    const msg = err instanceof Error ? err.message : String(err);
+    return { rows: [], error: `[${label}]${code ? ` (${code})` : ''}: ${msg}` };
+  }
+}
 
-    // Ensure manual holdings table exists (no-op after first call)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS finance_manual_holdings (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        as_of_date DATE NOT NULL,
-        asset_type TEXT NOT NULL CHECK (asset_type IN ('crypto', 'stock')),
-        asset_name TEXT NOT NULL,
-        platform TEXT NOT NULL DEFAULT 'Manual',
-        quantity NUMERIC(18,8),
-        usd_value NUMERIC(14,2) NOT NULL,
-        notes TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `);
+async function getData() {
+  const now = new Date();
+  const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
 
-    const [categoriesRes, uncategorizedRes, recentRes, spendRes, netFlowRes, snapshotsRes, manualRes, fxRes] = await Promise.all([
-      pool.query<Category>('SELECT * FROM finance_categories ORDER BY is_income, name'),
+  const [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR] = await Promise.all([
+    safeRows('categories', () =>
+      pool.query<Category>('SELECT * FROM finance_categories ORDER BY is_income, name')
+    ),
+    safeRows('uncategorized', () =>
       pool.query<Transaction>(
-        `SELECT t.*, c.name as category_name
+        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, t.created_at, c.name as category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
          WHERE t.status = 'uncategorized'
          ORDER BY t.date DESC LIMIT 100`
-      ),
+      )
+    ),
+    safeRows('recent', () =>
       pool.query<Transaction>(
-        `SELECT t.*, c.name as category_name
+        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, t.created_at, c.name as category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
          ORDER BY t.date DESC LIMIT 50`
-      ),
+      )
+    ),
+    safeRows('spend', () =>
       pool.query<SpendRow>(
         `SELECT c.name, c.color, SUM(ABS(t.amount)) as total,
            COALESCE(SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)), SUM(ABS(t.amount))) as total_usd
@@ -122,8 +114,10 @@ async function getData() {
          GROUP BY c.name, c.color
          ORDER BY total_usd DESC`,
         [startOfMonth, endOfMonth]
-      ),
-      pool.query(
+      )
+    ),
+    safeRows('netflow', () =>
+      pool.query<Record<string, string>>(
         `SELECT
            COALESCE(SUM(CASE WHEN is_income THEN amount ELSE 0 END), 0) as income,
            COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) ELSE 0 END), 0) as expenses,
@@ -135,39 +129,57 @@ async function getData() {
          ) fx ON true
          WHERE t.date >= $1 AND t.date <= $2 AND t.status = 'categorized'`,
         [startOfMonth, endOfMonth]
-      ),
-      pool.query<BalanceSnapshot>('SELECT *, balance_usd FROM finance_balance_snapshots ORDER BY date DESC, account ASC'),
+      )
+    ),
+    safeRows('snapshots', () =>
+      pool.query<BalanceSnapshot>('SELECT * FROM finance_balance_snapshots ORDER BY date DESC, account ASC')
+    ),
+    safeRows('holdings', () =>
       pool.query<ManualHolding>(
         `SELECT * FROM finance_manual_holdings
          WHERE as_of_date = (SELECT MAX(as_of_date) FROM finance_manual_holdings)
          ORDER BY asset_type, asset_name`
-      ),
-      pool.query<FxRate>('SELECT * FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50'),
-    ]);
+      )
+    ),
+    safeRows('fx', () =>
+      pool.query<FxRate>('SELECT * FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
+    ),
+  ]);
 
-    const income = parseFloat(netFlowRes.rows[0]?.income ?? '0');
-    const expenses = parseFloat(netFlowRes.rows[0]?.expenses ?? '0');
-    const income_usd = parseFloat(netFlowRes.rows[0]?.income_usd ?? '0');
-    const expenses_usd = parseFloat(netFlowRes.rows[0]?.expenses_usd ?? '0');
+  const netRow = netFlowR.rows[0] ?? {};
+  const income = parseFloat(netRow.income ?? '0');
+  const expenses = parseFloat(netRow.expenses ?? '0');
+  const income_usd = parseFloat(netRow.income_usd ?? '0');
+  const expenses_usd = parseFloat(netRow.expenses_usd ?? '0');
 
-    return {
-      categories: categoriesRes.rows,
-      uncategorized: uncategorizedRes.rows,
-      recentTransactions: recentRes.rows,
-      spendByCategory: spendRes.rows.map(r => ({ ...r, total: parseFloat(String(r.total)), total_usd: parseFloat(String(r.total_usd)) })),
-      netFlow: { income, expenses, net: income - expenses, income_usd, expenses_usd, net_usd: income_usd - expenses_usd },
-      snapshots: snapshotsRes.rows,
-      manualHoldings: manualRes.rows,
-      manualHoldingsDate: manualRes.rows[0]?.as_of_date ?? null,
-      fxRates: fxRes.rows,
-    };
-  } catch (err) {
-    logDbError('finances', err);
-    return empty;
-  }
+  const errors = [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR]
+    .map(r => r.error).filter(Boolean) as string[];
+
+  return {
+    categories: categoriesR.rows,
+    uncategorized: uncategorizedR.rows,
+    recentTransactions: recentR.rows,
+    spendByCategory: spendR.rows.map(r => ({ ...r, total: parseFloat(String(r.total)), total_usd: parseFloat(String(r.total_usd)) })),
+    netFlow: { income, expenses, net: income - expenses, income_usd, expenses_usd, net_usd: income_usd - expenses_usd },
+    snapshots: snapshotsR.rows,
+    manualHoldings: manualR.rows,
+    manualHoldingsDate: manualR.rows[0]?.as_of_date ?? null,
+    fxRates: fxR.rows,
+    dbErrors: errors,
+  };
 }
 
 export default async function FinancesPage() {
   const data = await getData();
-  return <FinancesView {...data} />;
+  return (
+    <>
+      {data.dbErrors.length > 0 && (
+        <div style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '12px 16px', marginBottom: 16, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+          <p style={{ color: 'var(--red)', marginBottom: 4, fontWeight: 600 }}>DB query errors — check Vercel logs for full details:</p>
+          {data.dbErrors.map((e, i) => <p key={i} style={{ color: 'var(--red)', opacity: 0.8 }}>{e}</p>)}
+        </div>
+      )}
+      <FinancesView {...data} />
+    </>
+  );
 }

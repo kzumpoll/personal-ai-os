@@ -71,6 +71,7 @@ interface Props {
   manualHoldings: ManualHolding[];
   manualHoldingsDate: string | null;
   fxRates: FxRate[];
+  dbErrors?: string[];
 }
 
 type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'holdings' | 'fx';
