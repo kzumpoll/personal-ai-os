@@ -14,11 +14,14 @@ export async function GET(req: NextRequest) {
   const pageSize  = Math.min(200, Math.max(1, parseInt(searchParams.get('pageSize') ?? '50')));
   const offset    = (page - 1) * pageSize;
 
+  const categoryId = searchParams.get('categoryId');
+
   const filterParams: unknown[] = [];
   const conditions: string[]    = ["t.status = 'categorized'"];
 
-  if (startDate) { conditions.push(`t.date >= $${filterParams.length + 1}`); filterParams.push(startDate); }
-  if (endDate)   { conditions.push(`t.date <= $${filterParams.length + 1}`); filterParams.push(endDate); }
+  if (startDate)  { conditions.push(`t.date >= $${filterParams.length + 1}`); filterParams.push(startDate); }
+  if (endDate)    { conditions.push(`t.date <= $${filterParams.length + 1}`); filterParams.push(endDate); }
+  if (categoryId) { conditions.push(`t.category_id = $${filterParams.length + 1}`); filterParams.push(categoryId); }
 
   const where = `WHERE ${conditions.join(' AND ')}`;
   const n     = filterParams.length;

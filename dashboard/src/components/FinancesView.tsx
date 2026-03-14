@@ -62,9 +62,16 @@ interface FxRate {
 }
 
 interface SpendRow {
+  category_id?: string;
   name: string;
   color: string;
   total: number;
+  total_usd: number;
+}
+
+interface MonthlyRow {
+  month: string;        // 'YYYY-MM'
+  category_name: string;
   total_usd: number;
 }
 
@@ -136,6 +143,49 @@ function SectionLabel({ children, color = 'var(--text-muted)' }: { children: Rea
   );
 }
 
+// ── Category emojis ───────────────────────────────────────────────────────────
+
+const CATEGORY_EMOJIS: Record<string, string> = {
+  'Income':                 '💰',
+  'Transfers':              '🔁',
+  'FX':                     '💱',
+  'Banking & Fees':         '🏦',
+  'Transport':              '🚕',
+  'Flights':                '✈️',
+  'Stays':                  '🏨',
+  'Food & Coffee':          '☕',
+  'Groceries':              '🛒',
+  'Fitness & Padel':        '🎾',
+  'Health & Care':          '🧴',
+  'Software & AI':          '💻',
+  'Phone & Connectivity':   '📶',
+  'Education':              '📚',
+  'Shopping':               '🛍️',
+  'Entertainment & Events': '🎟️',
+  'Tea & Hobbies':          '🍵',
+  'Business Services':      '🧰',
+  'Creator Economy':        '📸',
+  'Within Expenses':        '🫖',
+  'Uncategorized':          '❓',
+};
+
+function catLabel(name: string): string {
+  const emoji = CATEGORY_EMOJIS[name];
+  return emoji ? `${emoji} ${name}` : name;
+}
+
+function formatTxType(direction: string | null | undefined): string {
+  if (!direction) return '';
+  const d = direction.toLowerCase();
+  if (d === 'credit') return 'Credit';
+  if (d === 'debit')  return 'Debit';
+  if (d.includes('transfer')) return 'Transfer';
+  if (d.includes('card'))     return 'Card Payment';
+  if (d.includes('payment'))  return 'Payment';
+  if (d.includes('exchange') || d.includes('fx')) return 'FX Exchange';
+  return direction.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // ── DateFilter ────────────────────────────────────────────────────────────────
 
 function DateFilter({
@@ -152,10 +202,16 @@ function DateFilter({
     let ns = '', ne = '';
     if (label === 'This month')  { const r = monthRange(0);  ns = r.start; ne = r.end; }
     if (label === 'Last month')  { const r = monthRange(-1); ns = r.start; ne = r.end; }
-    if (label === 'Last 3m')     {
+    if (label === 'Last 3m') {
       const now = new Date();
       ne = monthRange(0).end;
       const from = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+      ns = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`;
+    }
+    if (label === 'Last 6m') {
+      const now = new Date();
+      ne = monthRange(0).end;
+      const from = new Date(now.getFullYear(), now.getMonth() - 5, 1);
       ns = `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`;
     }
     if (label === 'This year')   { const y = new Date().getFullYear(); ns = `${y}-01-01`; ne = `${y}-12-31`; }
@@ -177,7 +233,7 @@ function DateFilter({
         style={{ background: 'var(--cyan)', color: '#fff', cursor: 'pointer' }}>
         Apply
       </button>
-      {['This month', 'Last month', 'Last 3m', 'This year', 'All time'].map(lbl => (
+      {['This month', 'Last month', 'Last 3m', 'Last 6m', 'This year', 'All time'].map(lbl => (
         <button key={lbl} onClick={() => quick(lbl)}
           className="text-xs px-2 py-1 rounded"
           style={{ background: 'var(--surface-3)', color: 'var(--text-muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
@@ -208,8 +264,9 @@ function InboxRow({
 
   const amt      = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
   const isCredit = tx.direction === 'credit' || (tx.direction == null && amt >= 0);
-  const merchant = (tx.merchant_raw ?? tx.description).trim();
-  const hasSubDesc = tx.merchant_raw && tx.description !== tx.merchant_raw;
+  const txType   = formatTxType(tx.direction);
+  const merchant = tx.merchant_raw?.trim();
+  const showMerchant = merchant && merchant !== tx.description.trim();
 
   const expenseCats = categories.filter(c => !c.is_income);
   const incomeCats  = categories.filter(c =>  c.is_income);
@@ -222,19 +279,18 @@ function InboxRow({
           {fmtDate(tx.date)}
         </span>
 
-        {/* Merchant */}
+        {/* Description (primary) + type + merchant (subordinate) */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm truncate font-medium" style={{ color: 'var(--text)' }}>{merchant}</p>
-          {hasSubDesc && (
-            <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-faint)' }}>{tx.description}</p>
-          )}
+          <p className="text-sm truncate font-medium" style={{ color: 'var(--text)' }}>{tx.description}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            {txType && (
+              <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)' }}>{txType}</span>
+            )}
+            {showMerchant && (
+              <span className="text-xs truncate" style={{ color: 'var(--text-faint)', opacity: 0.7 }}>{merchant}</span>
+            )}
+          </div>
         </div>
-
-        {/* Direction badge */}
-        <span className="text-xs px-1.5 py-0.5 rounded shrink-0"
-          style={{ background: isCredit ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: isCredit ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)', fontSize: '10px' }}>
-          {isCredit ? 'CR' : 'DR'}
-        </span>
 
         {/* Amount */}
         <span className="text-sm font-medium shrink-0"
@@ -247,21 +303,18 @@ function InboxRow({
           <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>…</span>
         ) : (
           <div className="flex items-center gap-1.5 shrink-0">
-            {suggestion && suggestion.confidence < 0.65 && (
-              <span className="text-xs" style={{ color: 'var(--yellow)', fontSize: '9px', fontFamily: 'var(--font-mono)' }}>low</span>
-            )}
             <select
               value={selectedCatId}
               onChange={ev => setSelectedCatId(ev.target.value)}
               className="text-xs px-2 py-1 rounded"
-              style={{ background: 'var(--surface-3)', border: '1px solid var(--border)', color: 'var(--text)', maxWidth: 160, cursor: 'pointer' }}
+              style={{ background: 'var(--surface-3)', border: '1px solid var(--border)', color: 'var(--text)', maxWidth: 180, cursor: 'pointer' }}
             >
               <option value="">Pick category…</option>
-              <optgroup label="Expenses">
-                {expenseCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </optgroup>
               <optgroup label="Income">
-                {incomeCats.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {incomeCats.map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
+              </optgroup>
+              <optgroup label="Expenses">
+                {expenseCats.map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
               </optgroup>
             </select>
             <button
@@ -278,13 +331,6 @@ function InboxRow({
           </div>
         )}
       </div>
-
-      {/* Suggestion provenance */}
-      {suggestion && (
-        <p className="mt-1.5 text-xs" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', fontSize: '9px' }}>
-          {suggestion.source === 'memory' ? '🧠 memory' : suggestion.source === 'llm' ? '✨ ai' : '📋 rule'} · {suggestion.reason}
-        </p>
-      )}
     </div>
   );
 }
@@ -411,23 +457,42 @@ export default function FinancesView({
   }
 
   // ── Reports tab state ──
-  const [rptSpend, setRptSpend]       = useState<SpendRow[]>(spendByCategory);
-  const [rptFlow, setRptFlow]         = useState<NetFlow>(netFlow);
-  const [rptLoading, setRptLoading]   = useState(false);
-  const [rptStart, setRptStart]       = useState(startOfMonth);
-  const [rptEnd, setRptEnd]           = useState(endOfMonth);
+  const [rptSpend, setRptSpend]             = useState<SpendRow[]>(spendByCategory);
+  const [rptFlow, setRptFlow]               = useState<NetFlow>(netFlow);
+  const [rptMonthly, setRptMonthly]         = useState<MonthlyRow[]>([]);
+  const [rptLoading, setRptLoading]         = useState(false);
+  const [rptStart, setRptStart]             = useState(startOfMonth);
+  const [rptEnd, setRptEnd]                 = useState(endOfMonth);
+  const [expandedCat, setExpandedCat]       = useState<string | null>(null);
+  const [catTxItems, setCatTxItems]         = useState<Transaction[]>([]);
+  const [catTxLoading, setCatTxLoading]     = useState(false);
 
   async function fetchReports(start: string, end: string) {
     setRptLoading(true); setRptStart(start); setRptEnd(end);
+    setExpandedCat(null); setCatTxItems([]);
     try {
       const res = await fetch(`/api/finances/reports?startDate=${start}&endDate=${end}`);
       if (res.ok) {
-        const d = await res.json() as { spendByCategory: SpendRow[]; netFlow: NetFlow };
+        const d = await res.json() as { spendByCategory: SpendRow[]; netFlow: NetFlow; monthlyBreakdown: MonthlyRow[] };
         setRptSpend(d.spendByCategory);
         setRptFlow(d.netFlow);
+        setRptMonthly(d.monthlyBreakdown ?? []);
       }
     } catch { /* silent */ }
     finally { setRptLoading(false); }
+  }
+
+  async function toggleCatExpand(row: SpendRow) {
+    if (expandedCat === row.name) { setExpandedCat(null); setCatTxItems([]); return; }
+    setExpandedCat(row.name);
+    setCatTxItems([]);
+    if (!row.category_id) return;
+    setCatTxLoading(true);
+    try {
+      const res = await fetch(`/api/finances/transactions?startDate=${rptStart}&endDate=${rptEnd}&categoryId=${row.category_id}&pageSize=200`);
+      if (res.ok) { const d = await res.json(); setCatTxItems(d.transactions); }
+    } catch { /* silent */ }
+    finally { setCatTxLoading(false); }
   }
 
   // ── Summary card values ──
@@ -649,54 +714,112 @@ export default function FinancesView({
           {rptLoading ? (
             <p className="text-sm py-4 text-center" style={{ color: 'var(--text-faint)' }}>Loading…</p>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div>
-                <SectionLabel>Spend by Category (USD)</SectionLabel>
-                {rptSpend.length === 0 ? (
-                  <p className="text-sm" style={{ color: 'var(--text-faint)' }}>No categorized spending in this range.</p>
-                ) : (
-                  <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-6">
+              {/* Net flow summary */}
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Income',   val: rptFlow.income_usd,   color: 'var(--green)', prefix: '+' },
+                  { label: 'Expenses', val: rptFlow.expenses_usd, color: 'var(--red)',   prefix: '-' },
+                  { label: 'Net',      val: rptFlow.net_usd,      color: rptFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)', prefix: rptFlow.net_usd >= 0 ? '+' : '' },
+                ].map(({ label, val, color, prefix }) => (
+                  <div key={label} className="rounded-lg px-4 py-3"
+                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <p className="text-xs mb-1" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>{label}</p>
+                    <p className="text-base font-medium" style={{ color, fontFamily: 'var(--font-mono)' }}>{prefix}{fmtUsd(Math.abs(val))}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Spend by category — expandable */}
+              {rptSpend.length > 0 && (
+                <div>
+                  <SectionLabel>Spend by Category (USD) — click to expand</SectionLabel>
+                  <div className="flex flex-col gap-1.5">
                     {rptSpend.map(row => {
-                      const maxTotal = rptSpend[0]?.total_usd ?? 1;
-                      const pct      = Math.round((row.total_usd / maxTotal) * 100);
+                      const maxTotal  = rptSpend[0]?.total_usd ?? 1;
+                      const pct       = Math.round((row.total_usd / maxTotal) * 100);
+                      const isOpen    = expandedCat === row.name;
+                      const catMonths = rptMonthly.filter(m => m.category_name === row.name);
+                      const isMultiMonth = catMonths.length > 1;
+
                       return (
-                        <div key={row.name}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-sm" style={{ color: 'var(--text)' }}>{row.name}</span>
-                            <span className="text-xs font-medium" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{fmtUsd(row.total_usd)}</span>
-                          </div>
-                          <div className="rounded-full h-1.5" style={{ background: 'var(--surface-3)' }}>
-                            <div className="rounded-full h-1.5" style={{ width: `${pct}%`, background: row.color || 'var(--cyan)' }} />
-                          </div>
+                        <div key={row.name} className="rounded-lg overflow-hidden"
+                          style={{ border: `1px solid ${isOpen ? row.color || 'var(--cyan)' : 'var(--border)'}`, background: 'var(--surface)' }}>
+                          {/* Category row header */}
+                          <button
+                            onClick={() => toggleCatExpand(row)}
+                            className="w-full px-4 py-3 text-left"
+                            style={{ cursor: 'pointer', background: 'transparent' }}
+                          >
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-sm font-medium" style={{ color: 'var(--text)' }}>{catLabel(row.name)}</span>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs font-medium" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{fmtUsd(row.total_usd)}</span>
+                                <span className="text-xs" style={{ color: 'var(--text-faint)' }}>{isOpen ? '▲' : '▼'}</span>
+                              </div>
+                            </div>
+                            <div className="rounded-full h-1" style={{ background: 'var(--surface-3)' }}>
+                              <div className="rounded-full h-1 transition-all" style={{ width: `${pct}%`, background: row.color || 'var(--cyan)' }} />
+                            </div>
+                          </button>
+
+                          {/* Expanded: monthly breakdown + transactions */}
+                          {isOpen && (
+                            <div className="border-t px-4 pb-3 pt-2" style={{ borderColor: 'var(--border)' }}>
+                              {/* Monthly sub-breakdown */}
+                              {isMultiMonth && (
+                                <div className="mb-3">
+                                  <p className="text-xs mb-2" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Monthly</p>
+                                  <div className="flex flex-col gap-1">
+                                    {catMonths.map(m => {
+                                      const maxMon = Math.max(...catMonths.map(x => x.total_usd));
+                                      const mPct = Math.round((m.total_usd / maxMon) * 100);
+                                      const [yr, mo] = m.month.split('-');
+                                      const label = new Date(parseInt(yr), parseInt(mo) - 1, 1).toLocaleString('en-US', { month: 'short', year: '2-digit' });
+                                      return (
+                                        <div key={m.month} className="flex items-center gap-2">
+                                          <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 52 }}>{label}</span>
+                                          <div className="flex-1 rounded-full h-1" style={{ background: 'var(--surface-3)' }}>
+                                            <div className="rounded-full h-1" style={{ width: `${mPct}%`, background: row.color || 'var(--cyan)', opacity: 0.7 }} />
+                                          </div>
+                                          <span className="text-xs shrink-0" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', minWidth: 70, textAlign: 'right' }}>{fmtUsd(m.total_usd)}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                              {/* Transactions */}
+                              {catTxLoading ? (
+                                <p className="text-xs py-2" style={{ color: 'var(--text-faint)' }}>Loading transactions…</p>
+                              ) : catTxItems.length === 0 ? (
+                                <p className="text-xs py-2" style={{ color: 'var(--text-faint)' }}>No transactions</p>
+                              ) : (
+                                <div className="flex flex-col gap-1 max-h-64 overflow-y-auto">
+                                  {catTxItems.map(tx => {
+                                    const a = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
+                                    return (
+                                      <div key={tx.id} className="flex items-center gap-2 py-1 px-2 rounded"
+                                        style={{ background: 'var(--surface-3)' }}>
+                                        <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 80 }}>{fmtDate(tx.date)}</span>
+                                        <span className="text-xs flex-1 truncate" style={{ color: 'var(--text)' }}>{(tx.merchant_raw ?? tx.description).trim()}</span>
+                                        <span className="text-xs shrink-0 font-medium" style={{ color: a >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)' }}>{fmt(Math.abs(a), tx.currency)}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                )}
-              </div>
-              <div>
-                <SectionLabel>Net Flow (USD)</SectionLabel>
-                <div className="flex flex-col gap-3">
-                  {[
-                    { label: 'Income',   val: rptFlow.income_usd,   color: 'var(--green)', prefix: '+' },
-                    { label: 'Expenses', val: rptFlow.expenses_usd, color: 'var(--red)',   prefix: '-' },
-                  ].map(({ label, val, color, prefix }) => (
-                    <div key={label} className="flex items-center justify-between rounded-lg px-4 py-3"
-                      style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                      <span className="text-sm" style={{ color: 'var(--text-muted)' }}>{label}</span>
-                      <span className="text-sm font-medium" style={{ color, fontFamily: 'var(--font-mono)' }}>{prefix}{fmtUsd(val)}</span>
-                    </div>
-                  ))}
-                  <div className="flex items-center justify-between rounded-lg px-4 py-3"
-                    style={{ background: 'var(--surface)', border: `1px solid ${rptFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)'}` }}>
-                    <span className="text-sm font-medium" style={{ color: 'var(--text)' }}>Net</span>
-                    <span className="text-sm font-bold"
-                      style={{ color: rptFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)' }}>
-                      {rptFlow.net_usd >= 0 ? '+' : ''}{fmtUsd(rptFlow.net_usd)}
-                    </span>
-                  </div>
                 </div>
-              </div>
+              )}
+              {rptSpend.length === 0 && (
+                <p className="text-sm" style={{ color: 'var(--text-faint)' }}>No categorized spending in this range.</p>
+              )}
             </div>
           )}
         </div>

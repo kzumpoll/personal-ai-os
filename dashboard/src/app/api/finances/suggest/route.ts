@@ -7,24 +7,28 @@ const ALLOWED_CATEGORIES = [
   'Stays', 'Food & Coffee', 'Groceries', 'Fitness & Padel', 'Health & Care',
   'Software & AI', 'Phone & Connectivity', 'Education', 'Shopping',
   'Entertainment & Events', 'Tea & Hobbies', 'Business Services',
-  'Creator Economy', 'Uncategorized',
+  'Creator Economy', 'Within Expenses', 'Uncategorized',
 ];
 
 const RULES: Array<{ patterns: string[]; category: string }> = [
-  { patterns: ['uber', 'bolt', 'careem', 'gojek', 'grab', 'taxi', 'rta', 'nol'], category: 'Transport' },
-  { patterns: ['exchange', 'forex', 'wise', 'transferwise', 'western union', 'fx '], category: 'FX' },
+  { patterns: ['uber', 'bolt', 'careem', 'gojek', 'grab', 'taxi', 'rta', 'nol', 'salik'], category: 'Transport' },
+  { patterns: ['exchange', 'forex', 'wise', 'transferwise', 'western union', 'fx ', 'currency'], category: 'FX' },
   { patterns: ['transfer', 'wire', 'remittance'], category: 'Transfers' },
-  { patterns: ['plan fee', 'account fee', 'service charge', 'bank charge', 'monthly fee', 'annual fee', 'maintenance fee'], category: 'Banking & Fees' },
-  { patterns: ['salary', 'payroll', 'wages', 'dividend'], category: 'Income' },
-  { patterns: ['amazon', 'noon', 'namshi', 'shein', 'zara', 'h&m', 'ikea', 'apple store'], category: 'Shopping' },
-  { patterns: ['netflix', 'spotify', 'openai', 'chatgpt', 'claude', 'github', 'google one', 'icloud', 'dropbox'], category: 'Software & AI' },
-  { patterns: ['starbucks', 'costa', 'cafe', 'coffee', 'restaurant', 'pizza', 'mcdonalds', 'kfc', 'burger king', 'subway', 'sushi'], category: 'Food & Coffee' },
-  { patterns: ['carrefour', 'lulu', 'waitrose', 'spinneys', 'supermarket', 'grocery'], category: 'Groceries' },
-  { patterns: ['gym', 'padel', 'fitness', 'sport', 'arena', 'jungle padel', 'smash'], category: 'Fitness & Padel' },
-  { patterns: ['pharmacy', 'hospital', 'clinic', 'doctor', 'medical', 'health', 'dental'], category: 'Health & Care' },
-  { patterns: ['hotel', 'airbnb', 'booking.com', 'expedia', 'rove', 'marriott', 'hilton'], category: 'Stays' },
-  { patterns: ['emirates', 'etihad', 'flydubai', 'air arabia', 'airline', 'flight'], category: 'Flights' },
-  { patterns: ['du ', 'etisalat', 'e& ', 'telecom', 'mobile plan', 'data plan'], category: 'Phone & Connectivity' },
+  { patterns: ['plan fee', 'account fee', 'service charge', 'bank charge', 'monthly fee', 'annual fee', 'maintenance fee', 'subscription fee'], category: 'Banking & Fees' },
+  { patterns: ['salary', 'payroll', 'wages', 'dividend', 'freelance payment', 'invoice payment'], category: 'Income' },
+  { patterns: ['amazon', 'noon', 'namshi', 'shein', 'zara', 'h&m', 'ikea', 'apple store', 'level shoes', 'bloomingdales', 'mall'], category: 'Shopping' },
+  { patterns: ['netflix', 'spotify', 'openai', 'chatgpt', 'claude', 'anthropic', 'github', 'google one', 'icloud', 'dropbox', 'notion', 'figma', 'linear', 'cursor ', 'copilot', 'midjourney', 'adobe', 'vercel', 'railway', 'aws ', 'azure ', 'digitalocean', 'heroku', 'supabase', 'planetscale', 'resend', 'twilio', 'stripe'], category: 'Software & AI' },
+  { patterns: ['starbucks', 'costa', 'cafe', 'coffee', 'restaurant', 'pizza', 'mcdonalds', 'kfc', 'burger king', 'subway', 'sushi', 'shawarma', 'biryani', 'thai', 'japanese', 'chinese', 'turkish', 'bistro', 'grill', 'diner', 'eatery', 'brasserie', 'canteen'], category: 'Food & Coffee' },
+  { patterns: ['carrefour', 'lulu', 'waitrose', 'spinneys', 'supermarket', 'grocery', 'hypermarket', 'union coop', 'choithrams', 'geant'], category: 'Groceries' },
+  { patterns: ['gym', 'padel', 'fitness', 'sport', 'arena', 'jungle padel', 'smash', 'squash', 'tennis', 'yoga', 'pilates', 'crossfit'], category: 'Fitness & Padel' },
+  { patterns: ['pharmacy', 'hospital', 'clinic', 'doctor', 'medical', 'health', 'dental', 'optician', 'lab test', 'chemist', 'aster', 'mediclinic', 'life pharmacy'], category: 'Health & Care' },
+  { patterns: ['hotel', 'airbnb', 'booking.com', 'expedia', 'rove', 'marriott', 'hilton', 'hyatt', 'accor', 'ibis', 'radisson', 'rotana'], category: 'Stays' },
+  { patterns: ['emirates', 'etihad', 'flydubai', 'air arabia', 'airline', 'flight', 'lufthansa', 'british airways', 'qatar airways', 'air india', 'indigo', 'spicejet'], category: 'Flights' },
+  { patterns: ['du ', 'etisalat', 'e& ', 'telecom', 'mobile plan', 'data plan', 'sim card', 'roaming'], category: 'Phone & Connectivity' },
+  { patterns: ['udemy', 'coursera', 'masterclass', 'skillshare', 'books', 'bookshop', 'amazon kindle', 'university', 'tuition', 'school fee', 'training'], category: 'Education' },
+  { patterns: ['cinema', 'movie', 'concert', 'event', 'ticket', 'vox ', 'reel cinemas', 'dubai frame', 'global village', 'museum', 'expo', 'theme park'], category: 'Entertainment & Events' },
+  { patterns: ['within', 'tea house', 'tea shop', 'tea blend', 'teaware', 'tea ceremony'], category: 'Within Expenses' },
+  { patterns: ['beehiiv', 'substack', 'youtube', 'patreon', 'ko-fi', 'gumroad', 'lemon squeezy', 'camera', 'lens', 'tripod', 'microphone', 'studio'], category: 'Creator Economy' },
 ];
 
 function applyRules(merchant: string): string | null {
@@ -112,10 +116,13 @@ ${JSON.stringify(txList, null, 2)}
 
 Guidelines:
 - Credit transactions from employers/clients → "Income"
-- Currency exchange (Wise, FX bureau) → "FX"
+- Currency exchange (Wise, FX bureau, exchange) → "FX"
 - Bank-to-bank or wallet transfers → "Transfers"
+- Software & AI: Anthropic, Claude, OpenAI, ChatGPT, GitHub, Notion, Figma, Linear, Cursor, Vercel, Railway, AWS, Adobe, Spotify, Netflix, Dropbox, iCloud, Google One, any SaaS/API/cloud service
+- Within Expenses: anything related to the tea brand "Within" or within.ae
+- Creator Economy: Beehiiv, Substack, YouTube, camera/studio equipment, content creation tools
 - Use "Uncategorized" only if genuinely unclear (confidence < 0.5)
-- Keep reason concise (merchant type + signal)
+- Keep reason concise (merchant type + signal used)
 
 Return ONLY the JSON object, no markdown or extra text.`;
 
