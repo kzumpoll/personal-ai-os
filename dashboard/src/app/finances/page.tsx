@@ -154,7 +154,7 @@ async function getData() {
   const errors = [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR]
     .map(r => r.error).filter(Boolean) as string[];
 
-  return {
+  const result = {
     categories: categoriesR.rows,
     uncategorized: uncategorizedR.rows,
     recentTransactions: recentR.rows,
@@ -166,6 +166,10 @@ async function getData() {
     fxRates: fxR.rows,
     dbErrors: errors,
   };
+  // JSON round-trip strips any Date objects pg returns for TIMESTAMPTZ columns,
+  // converting them to ISO strings. Without this, React throws error #31 when
+  // a Date lands in a JSX child via the RSC payload.
+  return JSON.parse(JSON.stringify(result)) as typeof result;
 }
 
 export default async function FinancesPage() {
