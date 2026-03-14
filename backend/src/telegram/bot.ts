@@ -56,6 +56,7 @@ import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
 import { getLocalToday, getLocalTomorrow, getLocalYesterday } from '../services/localdate';
 import { createWin, getWinsForDate } from '../db/queries/wins';
+import { randomUUID } from 'crypto';
 import { isFinanceCaption, detectSource, parseRevolutCsv } from '../services/financeParser';
 import { createStatement, insertImportedTransactions } from '../db/queries/finances';
 
@@ -1720,7 +1721,7 @@ bot.on('document', async (ctx) => {
     }
 
     // --- Insert into DB ---
-    const importBatchId = crypto.randomUUID();
+    const importBatchId = randomUUID();
     console.log('[bot:doc] db insert start | batch_id:', importBatchId, '| rows:', rows.length);
     let inserted = 0;
     try {
