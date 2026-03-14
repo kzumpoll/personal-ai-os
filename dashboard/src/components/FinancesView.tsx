@@ -22,7 +22,6 @@ interface Transaction {
   account: string | null;
   is_income: boolean;
   status: string;
-  created_at: string;
 }
 
 interface BalanceSnapshot {
