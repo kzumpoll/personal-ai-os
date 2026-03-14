@@ -174,38 +174,50 @@ export interface ImportedTransaction {
 }
 
 /**
- * Insert normalized transactions from a CSV import.
+ * Insert normalized transactions from a CSV import using a single bulk INSERT.
  * Uses ON CONFLICT DO NOTHING on external_id to skip duplicates across re-imports.
  * Returns the number of rows actually inserted.
+ *
+ * Single query instead of N sequential queries — avoids pool starvation on large files.
  */
 export async function insertImportedTransactions(transactions: ImportedTransaction[]): Promise<number> {
-  let inserted = 0;
+  if (transactions.length === 0) return 0;
+
+  const params: unknown[] = [];
+  const valueClauses: string[] = [];
+
   for (const t of transactions) {
-    const result = await pool.query(
-      `INSERT INTO finance_transactions
-         (date, description, amount, currency, account, is_income, statement_id,
-          source_name, booking_date, description_raw, merchant_raw, fee, direction, external_id, import_batch_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-       ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO NOTHING`,
-      [
-        t.transaction_date,
-        t.description_raw,
-        t.amount,
-        t.currency,
-        null,                          // account — set later via categorization
-        t.direction === 'credit',      // is_income
-        t.statement_id,
-        t.source_name,
-        t.booking_date ?? null,
-        t.description_raw,
-        t.merchant_raw ?? null,
-        t.fee,
-        t.direction,
-        t.external_id,
-        t.import_batch_id,
-      ]
+    const b = params.length;
+    params.push(
+      t.transaction_date,           // 1 date
+      t.description_raw,            // 2 description
+      t.amount,                     // 3 amount
+      t.currency,                   // 4 currency
+      null,                         // 5 account — set later via categorization
+      t.direction === 'credit',     // 6 is_income
+      t.statement_id,               // 7 statement_id
+      t.source_name,                // 8 source_name
+      t.booking_date ?? null,       // 9 booking_date
+      t.description_raw,            // 10 description_raw
+      t.merchant_raw ?? null,       // 11 merchant_raw
+      t.fee,                        // 12 fee
+      t.direction,                  // 13 direction
+      t.external_id,                // 14 external_id
+      t.import_batch_id,            // 15 import_batch_id
     );
-    inserted += result.rowCount ?? 0;
+    valueClauses.push(
+      `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12},$${b+13},$${b+14},$${b+15})`
+    );
   }
-  return inserted;
+
+  const result = await pool.query(
+    `INSERT INTO finance_transactions
+       (date, description, amount, currency, account, is_income, statement_id,
+        source_name, booking_date, description_raw, merchant_raw, fee, direction, external_id, import_batch_id)
+     VALUES ${valueClauses.join(',')}
+     ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO NOTHING`,
+    params
+  );
+
+  return result.rowCount ?? 0;
 }

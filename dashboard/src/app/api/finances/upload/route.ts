@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
 
     // Create statement record
     const { rows: stmtRows } = await pool.query(
-      `INSERT INTO finance_statements (filename, account, row_count) VALUES ($1, $2, $3) RETURNING id`,
+      `INSERT INTO finance_statements (filename, account, parsed_count) VALUES ($1, $2, $3) RETURNING id`,
       [file.name, account, lines.length - 1]
     );
     const statementId = stmtRows[0].id;
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Update statement row count
-    await pool.query('UPDATE finance_statements SET row_count = $2 WHERE id = $1', [statementId, imported]);
+    await pool.query('UPDATE finance_statements SET parsed_count = $2 WHERE id = $1', [statementId, imported]);
 
     revalidatePath('/finances');
     return NextResponse.json({ imported, statementId });
