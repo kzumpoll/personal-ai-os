@@ -141,3 +141,71 @@ export async function insertTransactions(transactions: Array<{
   }
   return count;
 }
+
+/** Create a finance_statements record and return its UUID. */
+export async function createStatement(data: {
+  filename: string;
+  account?: string;
+  parsedCount: number;
+  importBatchId: string;
+}): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO finance_statements (id, filename, account, parsed_count)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id`,
+    [data.importBatchId, data.filename, data.account ?? null, data.parsedCount]
+  );
+  return rows[0].id as string;
+}
+
+export interface ImportedTransaction {
+  source_name: string;
+  transaction_date: string;
+  booking_date?: string;
+  amount: number;
+  currency: string;
+  description_raw: string;
+  merchant_raw?: string;
+  fee: number;
+  direction: 'credit' | 'debit';
+  external_id: string;
+  import_batch_id: string;
+  statement_id: string;
+}
+
+/**
+ * Insert normalized transactions from a CSV import.
+ * Uses ON CONFLICT DO NOTHING on external_id to skip duplicates across re-imports.
+ * Returns the number of rows actually inserted.
+ */
+export async function insertImportedTransactions(transactions: ImportedTransaction[]): Promise<number> {
+  let inserted = 0;
+  for (const t of transactions) {
+    const result = await pool.query(
+      `INSERT INTO finance_transactions
+         (date, description, amount, currency, account, is_income, statement_id,
+          source_name, booking_date, description_raw, merchant_raw, fee, direction, external_id, import_batch_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO NOTHING`,
+      [
+        t.transaction_date,
+        t.description_raw,
+        t.amount,
+        t.currency,
+        null,                          // account — set later via categorization
+        t.direction === 'credit',      // is_income
+        t.statement_id,
+        t.source_name,
+        t.booking_date ?? null,
+        t.description_raw,
+        t.merchant_raw ?? null,
+        t.fee,
+        t.direction,
+        t.external_id,
+        t.import_batch_id,
+      ]
+    );
+    inserted += result.rowCount ?? 0;
+  }
+  return inserted;
+}

@@ -56,6 +56,8 @@ import { getEventsForDate } from '../services/calendar';
 import { getJournalByDate } from '../db/queries/journals';
 import { getLocalToday, getLocalTomorrow, getLocalYesterday } from '../services/localdate';
 import { createWin, getWinsForDate } from '../db/queries/wins';
+import { isFinanceCaption, detectSource, parseRevolutCsv } from '../services/financeParser';
+import { createStatement, insertImportedTransactions } from '../db/queries/finances';
 
 // ---------------------------------------------------------------------------
 // Per-chat message history ring buffer (for context carry-over)
@@ -1628,6 +1630,132 @@ bot.on('voice', async (ctx) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[bot] voice error for chat', chatId, ':', msg);
     await ctx.reply('Failed to transcribe voice note. Please try again or type your message.');
+  }
+});
+
+// Handle document uploads (CSV finance imports, etc.)
+bot.on('document', async (ctx) => {
+  const chatId = ctx.chat.id;
+  const doc = ctx.message.document;
+  const caption = (ctx.message.caption ?? '').trim();
+
+  console.log('[bot:doc] document message received | chat:', chatId, '| file_id:', doc.file_id, '| mime:', doc.mime_type, '| filename:', doc.file_name, '| caption:', caption.slice(0, 80));
+
+  // Always acknowledge immediately before any async work
+  await ctx.reply('Received your finance file. Processing now.');
+
+  try {
+    // --- Extract file metadata ---
+    const filename = doc.file_name ?? 'upload';
+    const mimeType = doc.mime_type ?? '';
+    const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+    console.log('[bot:doc] file metadata extracted | filename:', filename, '| ext:', ext, '| mime:', mimeType);
+
+    // --- Gate: must be a finance-related caption ---
+    if (!isFinanceCaption(caption)) {
+      console.log('[bot:doc] caption not finance-related — ignoring document');
+      await ctx.reply("I received a file but I'm not sure what to do with it. If this is a bank statement, add a caption like \"finance statement revolut\" and resend.");
+      return;
+    }
+
+    // --- Gate: CSV only for now ---
+    if (ext === 'pdf' || mimeType === 'application/pdf') {
+      console.log('[bot:doc] PDF document rejected — not yet supported');
+      await ctx.reply('PDF imports are not supported yet. Please export your statement as a CSV file and resend.');
+      return;
+    }
+
+    if (ext !== 'csv' && !mimeType.includes('csv') && !mimeType.includes('text')) {
+      console.log('[bot:doc] unsupported file type:', ext, mimeType);
+      await ctx.reply(`Unsupported file type (.${ext}). Please send a CSV export from your bank.`);
+      return;
+    }
+
+    // --- Detect source ---
+    const source = detectSource(caption, filename);
+    console.log('[bot:doc] source detection result:', source);
+
+    if (source === 'unknown') {
+      await ctx.reply("I received your finance file. Is this from Revolut or Wio?");
+      return;
+    }
+
+    if (source === 'wio') {
+      await ctx.reply('Wio CSV parsing is not implemented yet. Only Revolut CSVs are supported right now.');
+      return;
+    }
+
+    // --- Download file from Telegram ---
+    console.log('[bot:doc] telegram file download started | file_id:', doc.file_id);
+    let fileBuffer: Buffer;
+    try {
+      const fileUrl = await getFilePath(process.env.TELEGRAM_BOT_TOKEN!, doc.file_id);
+      fileBuffer = await downloadVoiceNote(fileUrl);
+      console.log('[bot:doc] telegram file download success | bytes:', fileBuffer.length);
+    } catch (dlErr) {
+      const dlMsg = dlErr instanceof Error ? dlErr.message : String(dlErr);
+      console.error('[bot:doc] telegram file download failure:', dlMsg);
+      await ctx.reply(`Failed to download the file from Telegram: ${dlMsg.slice(0, 80)}`);
+      return;
+    }
+
+    const csvText = fileBuffer.toString('utf-8');
+
+    // --- Parse CSV ---
+    console.log('[bot:doc] parser start | source:', source);
+    let rows;
+    try {
+      rows = parseRevolutCsv(csvText);
+      console.log('[bot:doc] parser result | row count:', rows.length);
+    } catch (parseErr) {
+      const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      console.error('[bot:doc] parser error:', parseMsg);
+      await ctx.reply(`Could not parse the CSV: ${parseMsg}`);
+      return;
+    }
+
+    if (rows.length === 0) {
+      await ctx.reply('The CSV contained no importable transactions (all rows may be PENDING or FAILED).');
+      return;
+    }
+
+    // --- Insert into DB ---
+    const importBatchId = crypto.randomUUID();
+    console.log('[bot:doc] db insert start | batch_id:', importBatchId, '| rows:', rows.length);
+    let inserted = 0;
+    try {
+      const statementId = await createStatement({
+        filename,
+        parsedCount: rows.length,
+        importBatchId,
+      });
+
+      const toInsert = rows.map((r) => ({
+        ...r,
+        import_batch_id: importBatchId,
+        statement_id: statementId,
+      }));
+
+      inserted = await insertImportedTransactions(toInsert);
+      console.log('[bot:doc] db insert success | inserted:', inserted, '| skipped (duplicates):', rows.length - inserted);
+    } catch (dbErr) {
+      const dbMsg = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      console.error('[bot:doc] db insert failure:', dbMsg);
+      await ctx.reply(`Parsed ${rows.length} rows but failed to save to the database: ${dbMsg.slice(0, 120)}`);
+      return;
+    }
+
+    // --- Final reply ---
+    const skipped = rows.length - inserted;
+    const skippedNote = skipped > 0 ? `\n${skipped} duplicate(s) skipped.` : '';
+    const reply = `Imported ${inserted} transactions from Revolut CSV.\n\nBatch ID: ${importBatchId.slice(0, 8)}...${skippedNote}`;
+    console.log('[bot:doc] final reply sent | inserted:', inserted, '| skipped:', skipped);
+    await ctx.reply(reply);
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[bot:doc] unhandled error for chat', chatId, ':', msg);
+    await ctx.reply(`Something went wrong processing the file: ${msg.slice(0, 100)}`);
   }
 });
 
