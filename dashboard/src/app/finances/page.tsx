@@ -15,13 +15,15 @@ interface Transaction {
   id: string;
   date: string;
   description: string;
-  amount: number;
+  merchant_raw: string | null;
+  amount: string | number;
   currency: string;
   category_id: string | null;
   category_name: string | null;
   account: string | null;
   is_income: boolean;
   status: string;
+  direction: string | null;
 }
 
 interface BalanceSnapshot {
@@ -74,36 +76,58 @@ async function safeRows<T>(label: string, fn: () => Promise<{ rows: T[] }>): Pro
   }
 }
 
+async function safeValue<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<{ value: T; error: string | null }> {
+  try {
+    const value = await fn();
+    return { value, error: null };
+  } catch (err) {
+    logDbError(`finances/${label}`, err);
+    const code = (err as Record<string, unknown>)?.code;
+    const msg = err instanceof Error ? err.message : String(err);
+    return { value: fallback, error: `[${label}]${code ? ` (${code})` : ''}: ${msg}` };
+  }
+}
+
 async function getData() {
   const now = new Date();
   const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
 
-  const [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR] = await Promise.all([
+  const [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR] = await Promise.all([
     safeRows('categories', () =>
       pool.query<Category>('SELECT id, name, color, is_income FROM finance_categories ORDER BY is_income, name')
     ),
     safeRows('uncategorized', () =>
       pool.query<Transaction>(
-        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, c.name as category_name
+        `SELECT t.id, t.date::text AS date, t.description, t.merchant_raw, t.amount::text AS amount,
+                t.currency, t.category_id, t.account, t.is_income, t.status, t.direction,
+                c.name AS category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
          WHERE t.status = 'uncategorized'
-         ORDER BY t.date DESC LIMIT 100`
+         ORDER BY t.date DESC LIMIT 30`
       )
     ),
-    safeRows('recent', () =>
+    safeValue('inbox_count', async () => {
+      const res = await pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM finance_transactions WHERE status = 'uncategorized'`);
+      return parseInt(res.rows[0]?.count ?? '0');
+    }, 0),
+    safeRows('categorized', () =>
       pool.query<Transaction>(
-        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, c.name as category_name
+        `SELECT t.id, t.date::text AS date, t.description, t.merchant_raw, t.amount::text AS amount,
+                t.currency, t.category_id, t.account, t.is_income, t.status, t.direction,
+                c.name AS category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
-         ORDER BY t.date DESC LIMIT 50`
+         WHERE t.status = 'categorized' AND t.date >= $1 AND t.date <= $2
+         ORDER BY t.date DESC LIMIT 50`,
+        [startOfMonth, endOfMonth]
       )
     ),
     safeRows('spend', () =>
       pool.query<SpendRow>(
-        `SELECT c.name, c.color, SUM(ABS(t.amount)) as total,
-           COALESCE(SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)), SUM(ABS(t.amount))) as total_usd
+        `SELECT c.name, c.color, SUM(ABS(t.amount))::text AS total,
+           COALESCE(SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)), SUM(ABS(t.amount)))::text AS total_usd
          FROM finance_transactions t
          JOIN finance_categories c ON t.category_id = c.id
          LEFT JOIN LATERAL (
@@ -118,10 +142,10 @@ async function getData() {
     safeRows('netflow', () =>
       pool.query<Record<string, string>>(
         `SELECT
-           COALESCE(SUM(CASE WHEN is_income THEN amount ELSE 0 END), 0) as income,
-           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) ELSE 0 END), 0) as expenses,
-           COALESCE(SUM(CASE WHEN is_income THEN amount / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0) as income_usd,
-           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0) as expenses_usd
+           COALESCE(SUM(CASE WHEN is_income THEN amount ELSE 0 END), 0)::text AS income,
+           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) ELSE 0 END), 0)::text AS expenses,
+           COALESCE(SUM(CASE WHEN is_income THEN amount / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0)::text AS income_usd,
+           COALESCE(SUM(CASE WHEN NOT is_income THEN ABS(amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0) ELSE 0 END), 0)::text AS expenses_usd
          FROM finance_transactions t
          LEFT JOIN LATERAL (
            SELECT rate_to_usd FROM fx_rates WHERE currency = t.currency AND date <= t.date ORDER BY date DESC LIMIT 1
@@ -131,17 +155,17 @@ async function getData() {
       )
     ),
     safeRows('snapshots', () =>
-      pool.query<BalanceSnapshot>('SELECT id, account, date, balance, currency, balance_usd, notes FROM finance_balance_snapshots ORDER BY date DESC, account ASC')
+      pool.query<BalanceSnapshot>('SELECT id, account, date::text AS date, balance, currency, balance_usd, notes FROM finance_balance_snapshots ORDER BY date DESC, account ASC')
     ),
     safeRows('holdings', () =>
       pool.query<ManualHolding>(
-        `SELECT id, as_of_date, asset_type, asset_name, platform, quantity, usd_value, notes FROM finance_manual_holdings
+        `SELECT id, as_of_date::text AS as_of_date, asset_type, asset_name, platform, quantity, usd_value, notes FROM finance_manual_holdings
          WHERE as_of_date = (SELECT MAX(as_of_date) FROM finance_manual_holdings)
          ORDER BY asset_type, asset_name`
       )
     ),
     safeRows('fx', () =>
-      pool.query<FxRate>('SELECT id, date, currency, rate_to_usd, is_estimated FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
+      pool.query<FxRate>('SELECT id, date::text AS date, currency, rate_to_usd, is_estimated FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
     ),
   ]);
 
@@ -151,13 +175,14 @@ async function getData() {
   const income_usd = parseFloat(netRow.income_usd ?? '0');
   const expenses_usd = parseFloat(netRow.expenses_usd ?? '0');
 
-  const errors = [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR]
+  const errors = [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR]
     .map(r => r.error).filter(Boolean) as string[];
 
   const result = {
     categories: categoriesR.rows,
     uncategorized: uncategorizedR.rows,
-    recentTransactions: recentR.rows,
+    inboxTotal: inboxTotalR.value,
+    categorizedTransactions: categorizedR.rows,
     spendByCategory: spendR.rows.map(r => ({ ...r, total: parseFloat(String(r.total)), total_usd: parseFloat(String(r.total_usd)) })),
     netFlow: { income, expenses, net: income - expenses, income_usd, expenses_usd, net_usd: income_usd - expenses_usd },
     snapshots: snapshotsR.rows,
@@ -165,6 +190,8 @@ async function getData() {
     manualHoldingsDate: manualR.rows[0]?.as_of_date ?? null,
     fxRates: fxR.rows,
     dbErrors: errors,
+    startOfMonth,
+    endOfMonth,
   };
   // JSON round-trip strips any Date objects pg returns for TIMESTAMPTZ columns,
   // converting them to ISO strings. Without this, React throws error #31 when

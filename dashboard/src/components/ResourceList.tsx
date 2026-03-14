@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { format } from 'date-fns';
-import { Search, ExternalLink, X, ChevronRight, Trash2 } from 'lucide-react';
+import { Search, ExternalLink, X, ChevronRight, Trash2, Pencil } from 'lucide-react';
 import { Resource } from '@/lib/db';
 
 const typeColors: Record<string, { color: string; bg: string }> = {
@@ -131,6 +131,37 @@ export default function ResourceList({ resources: initial }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editType, setEditType] = useState('note');
+  const [editSaving, setEditSaving] = useState(false);
+
+  function startEdit(r: Resource, e: React.MouseEvent) {
+    e.stopPropagation();
+    setEditingId(r.id);
+    setEditTitle(r.title);
+    setEditContent(r.content_or_url ?? '');
+    setEditType(r.type ?? 'note');
+    setExpandedId(r.id);
+  }
+
+  async function saveEdit(id: string) {
+    if (!editTitle.trim()) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/api/resources/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: editTitle.trim(), content_or_url: editContent.trim() || null, type: editType }),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      const updated = await res.json() as Resource;
+      setResources(prev => prev.map(r => r.id === id ? updated : r));
+      setEditingId(null);
+    } catch { /* silent */ }
+    finally { setEditSaving(false); }
+  }
 
   // Collect unique types from the data
   const types = useMemo(() => {
@@ -291,6 +322,18 @@ export default function ResourceList({ resources: initial }: Props) {
                     )}
                     {dateStr && <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: "var(--font-mono)" }}>{dateStr}</span>}
 
+                    {/* Edit button — visible on hover */}
+                    {editingId !== r.id && (
+                      <button
+                        onClick={(e) => startEdit(r, e)}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 2 }}
+                        aria-label="Edit resource"
+                      >
+                        <Pencil size={12} />
+                      </button>
+                    )}
+
                     {/* Delete button — visible on hover */}
                     {isConfirming ? (
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -325,29 +368,67 @@ export default function ResourceList({ resources: initial }: Props) {
                   </div>
                 </div>
 
-                {/* Expanded detail */}
+                {/* Expanded detail / inline editor */}
                 {isExpanded && (
                   <div className="px-4 pb-4 pt-0 ml-6" style={{ borderTop: '1px solid var(--border)' }}>
-                    <div className="pt-3 flex flex-col gap-2">
-                      {r.content_or_url && (
-                        <div>
-                          <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>
-                            {hasUrl ? 'URL' : 'Content'}
-                          </label>
-                          {hasUrl ? (
-                            <a href={r.content_or_url} target="_blank" rel="noopener noreferrer" className="text-xs break-all" style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}>{r.content_or_url}</a>
-                          ) : (
-                            <p className="text-sm leading-relaxed" style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{r.content_or_url}</p>
-                          )}
+                    {editingId === r.id ? (
+                      <div className="pt-3 flex flex-col gap-2">
+                        <input
+                          autoFocus
+                          value={editTitle}
+                          onChange={e => setEditTitle(e.target.value)}
+                          style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text)', fontSize: 13, outline: 'none', width: '100%' }}
+                        />
+                        <textarea
+                          value={editContent}
+                          onChange={e => setEditContent(e.target.value)}
+                          rows={5}
+                          style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '6px 10px', color: 'var(--text)', fontSize: 13, outline: 'none', resize: 'vertical', width: '100%', fontFamily: 'inherit' }}
+                        />
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={editType}
+                            onChange={e => setEditType(e.target.value)}
+                            style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 8px', color: 'var(--text-muted)', fontSize: 12, outline: 'none', cursor: 'pointer' }}
+                          >
+                            {['note', 'link', 'article', 'book', 'video', 'tool'].map(t => (
+                              <option key={t} value={t}>{t}</option>
+                            ))}
+                          </select>
+                          <div style={{ flex: 1 }} />
+                          <button
+                            onClick={() => setEditingId(null)}
+                            style={{ background: 'none', border: 'none', color: 'var(--text-faint)', cursor: 'pointer', fontSize: 12, padding: '4px 8px' }}
+                          >Cancel</button>
+                          <button
+                            onClick={() => saveEdit(r.id)}
+                            disabled={!editTitle.trim() || editSaving}
+                            style={{ background: editTitle.trim() ? 'var(--cyan)' : 'var(--surface)', border: 'none', borderRadius: 6, color: editTitle.trim() ? '#fff' : 'var(--text-faint)', cursor: editTitle.trim() ? 'pointer' : 'default', fontSize: 12, fontWeight: 600, padding: '4px 14px' }}
+                          >{editSaving ? 'Saving…' : 'Save'}</button>
                         </div>
-                      )}
-                      {r.type && (
-                        <div>
-                          <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Type</label>
-                          <p className="text-xs capitalize" style={{ color: 'var(--text-muted)' }}>{r.type}</p>
-                        </div>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      <div className="pt-3 flex flex-col gap-2">
+                        {r.content_or_url && (
+                          <div>
+                            <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>
+                              {hasUrl ? 'URL' : 'Content'}
+                            </label>
+                            {hasUrl ? (
+                              <a href={r.content_or_url} target="_blank" rel="noopener noreferrer" className="text-xs break-all" style={{ color: 'var(--cyan)', fontFamily: "var(--font-mono)" }}>{r.content_or_url}</a>
+                            ) : (
+                              <p className="text-sm leading-relaxed" style={{ color: 'var(--text)', whiteSpace: 'pre-wrap' }}>{r.content_or_url}</p>
+                            )}
+                          </div>
+                        )}
+                        {r.type && (
+                          <div>
+                            <label style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)', marginBottom: 4, display: 'block' }}>Type</label>
+                            <p className="text-xs capitalize" style={{ color: 'var(--text-muted)' }}>{r.type}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
