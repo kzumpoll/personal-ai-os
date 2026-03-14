@@ -22,7 +22,6 @@ interface Transaction {
   account: string | null;
   is_income: boolean;
   status: string;
-  created_at: string;
 }
 
 interface BalanceSnapshot {
@@ -82,11 +81,11 @@ async function getData() {
 
   const [categoriesR, uncategorizedR, recentR, spendR, netFlowR, snapshotsR, manualR, fxR] = await Promise.all([
     safeRows('categories', () =>
-      pool.query<Category>('SELECT * FROM finance_categories ORDER BY is_income, name')
+      pool.query<Category>('SELECT id, name, color, is_income FROM finance_categories ORDER BY is_income, name')
     ),
     safeRows('uncategorized', () =>
       pool.query<Transaction>(
-        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, t.created_at, c.name as category_name
+        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, c.name as category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
          WHERE t.status = 'uncategorized'
@@ -95,7 +94,7 @@ async function getData() {
     ),
     safeRows('recent', () =>
       pool.query<Transaction>(
-        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, t.created_at, c.name as category_name
+        `SELECT t.id, t.date, t.description, t.amount, t.currency, t.category_id, t.account, t.is_income, t.status, c.name as category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
          ORDER BY t.date DESC LIMIT 50`
@@ -132,17 +131,17 @@ async function getData() {
       )
     ),
     safeRows('snapshots', () =>
-      pool.query<BalanceSnapshot>('SELECT * FROM finance_balance_snapshots ORDER BY date DESC, account ASC')
+      pool.query<BalanceSnapshot>('SELECT id, account, date, balance, currency, balance_usd, notes FROM finance_balance_snapshots ORDER BY date DESC, account ASC')
     ),
     safeRows('holdings', () =>
       pool.query<ManualHolding>(
-        `SELECT * FROM finance_manual_holdings
+        `SELECT id, as_of_date, asset_type, asset_name, platform, quantity, usd_value, notes FROM finance_manual_holdings
          WHERE as_of_date = (SELECT MAX(as_of_date) FROM finance_manual_holdings)
          ORDER BY asset_type, asset_name`
       )
     ),
     safeRows('fx', () =>
-      pool.query<FxRate>('SELECT * FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
+      pool.query<FxRate>('SELECT id, date, currency, rate_to_usd, is_estimated FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
     ),
   ]);
 
