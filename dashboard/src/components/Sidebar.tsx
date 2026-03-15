@@ -13,7 +13,6 @@ import {
   MessageCircle,
   BookOpen,
   FolderKanban,
-  Target,
   Bookmark,
   Sun,
   Moon,
@@ -22,7 +21,7 @@ import {
   DollarSign,
   PanelLeftClose,
   PanelLeftOpen,
-  Sparkles,
+  Layers,
 } from 'lucide-react';
 import ClaudeCodeIndicator from './ClaudeCodeIndicator';
 
@@ -49,8 +48,7 @@ const navGroups = [
     label: 'Systems',
     items: [
       { href: '/projects',   label: 'Projects',   Icon: FolderKanban },
-      { href: '/goals',          label: 'Goals',          Icon: Target },
-      { href: '/manifestations', label: 'Visionboard',    Icon: Sparkles },
+      { href: '/lifeos',     label: 'Life OS',    Icon: Layers },
       { href: '/resources',  label: 'Resources',  Icon: Bookmark },
       { href: '/finances',   label: 'Finances',   Icon: DollarSign },
       { href: '/search',     label: 'Search',     Icon: Search },

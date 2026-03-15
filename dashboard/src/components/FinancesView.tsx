@@ -75,6 +75,18 @@ interface MonthlyRow {
   total_usd: number;
 }
 
+interface NetWorthSnapshot {
+  id: string;
+  snapshot_date: string;
+  crypto_value: string;
+  stocks_value: string;
+  bank_accounts_value: string;
+  cash_value: string;
+  assets_value: string;
+  notes: string | null;
+  created_at: string;
+}
+
 interface NetFlow {
   income: number;
   expenses: number;
@@ -102,12 +114,13 @@ interface Props {
   manualHoldings: ManualHolding[];
   manualHoldingsDate: string | null;
   fxRates: FxRate[];
+  netWorthSnapshots: NetWorthSnapshot[];
   dbErrors?: string[];
   startOfMonth: string;
   endOfMonth: string;
 }
 
-type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'holdings' | 'fx';
+type Tab = 'inbox' | 'transactions' | 'reports' | 'balances' | 'fx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -166,6 +179,8 @@ const CATEGORY_EMOJIS: Record<string, string> = {
   'Business Services':      '🧰',
   'Creator Economy':        '📸',
   'Within Expenses':        '🫖',
+  'Rent':                   '🏠',
+  'Food Delivery':          '🛵',
   'Uncategorized':          '❓',
 };
 
@@ -348,6 +363,7 @@ export default function FinancesView({
   manualHoldings,
   manualHoldingsDate,
   fxRates,
+  netWorthSnapshots,
   dbErrors,
   startOfMonth,
   endOfMonth,
@@ -375,8 +391,16 @@ export default function FinancesView({
   const [inboxCount, setInboxCount]     = useState(inboxTotal);
   const [inboxPage, setInboxPage]       = useState(1);
   const [inboxLoading, setInboxLoading] = useState(false);
+  const [inboxSearch, setInboxSearch]   = useState('');
   const PAGE_SIZE = 30;
   const inboxPages = Math.max(1, Math.ceil(inboxCount / PAGE_SIZE));
+  const inboxFiltered = inboxSearch.trim()
+    ? inboxItems.filter(tx => {
+        const q = inboxSearch.toLowerCase();
+        return tx.description.toLowerCase().includes(q) ||
+               (tx.merchant_raw ?? '').toLowerCase().includes(q);
+      })
+    : inboxItems;
 
   // ── LLM suggestions ──
   const [suggestions, setSuggestions]               = useState<Record<string, Suggestion>>({});
@@ -496,9 +520,14 @@ export default function FinancesView({
   }
 
   // ── Summary card values ──
-  const cashTotal        = snapshots.reduce((s, r) => s + Number(r.balance_usd ?? 0), 0);
-  const manualCryptoTotal = manualHoldings.filter(h => h.asset_type === 'crypto').reduce((s, h) => s + Number(h.usd_value), 0);
-  const manualStockTotal  = manualHoldings.filter(h => h.asset_type === 'stock').reduce((s, h) => s + Number(h.usd_value), 0);
+  // Prefer latest net worth snapshot; fall back to old manual holdings data
+  const latestNW = netWorthSnapshots[0];
+  const cashTotal        = latestNW ? parseFloat(latestNW.bank_accounts_value) + parseFloat(latestNW.cash_value)
+                                    : snapshots.reduce((s, r) => s + Number(r.balance_usd ?? 0), 0);
+  const manualCryptoTotal = latestNW ? parseFloat(latestNW.crypto_value)
+                                     : manualHoldings.filter(h => h.asset_type === 'crypto').reduce((s, h) => s + Number(h.usd_value), 0);
+  const manualStockTotal  = latestNW ? parseFloat(latestNW.stocks_value)
+                                     : manualHoldings.filter(h => h.asset_type === 'stock').reduce((s, h) => s + Number(h.usd_value), 0);
 
   // ── Tabs ──
   const tabs: { key: Tab; label: string; count?: number }[] = [
@@ -506,7 +535,6 @@ export default function FinancesView({
     { key: 'transactions', label: 'Transactions' },
     { key: 'reports',      label: 'Reports' },
     { key: 'balances',     label: 'Balances' },
-    { key: 'holdings',     label: 'Crypto/Stocks' },
     { key: 'fx',           label: 'FX Rates' },
   ];
 
@@ -532,14 +560,11 @@ export default function FinancesView({
           <p className="text-lg font-medium" style={{ color: 'var(--red)' }}>{fmtUsd(netFlow.expenses_usd)}</p>
         </div>
 
-        {/* Net — privacy toggle */}
+        {/* Net */}
         <div className="rounded-lg p-4 relative" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
             <Wallet size={14} style={{ color: netFlow.net_usd >= 0 ? 'var(--green)' : 'var(--red)' }} />
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Net</span>
-            <button onClick={togglePrivacy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 0, marginLeft: 'auto' }}>
-              {privacyHidden ? <EyeOff size={11} /> : <Eye size={11} />}
-            </button>
           </div>
           {privacyHidden
             ? <p className="text-lg font-medium" style={{ color: 'var(--text-muted)', letterSpacing: '0.15em' }}>••••</p>
@@ -573,11 +598,14 @@ export default function FinancesView({
           }
         </div>
 
-        {/* Crypto */}
+        {/* Crypto — privacy toggle lives here */}
         <div className="rounded-lg p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2 mb-1">
             <Bitcoin size={14} style={{ color: 'var(--yellow)' }} />
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '9px', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--text-faint)' }}>Crypto</span>
+            <button onClick={togglePrivacy} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 0, marginLeft: 'auto' }}>
+              {privacyHidden ? <EyeOff size={11} /> : <Eye size={11} />}
+            </button>
           </div>
           {privacyHidden
             ? <p className="text-lg font-medium" style={{ color: 'var(--text-muted)', letterSpacing: '0.15em' }}>••••</p>
@@ -616,15 +644,26 @@ export default function FinancesView({
       {/* ── Inbox ── */}
       {tab === 'inbox' && (
         <div>
+          {/* Search filter */}
+          <div className="mb-3">
+            <input
+              type="text"
+              value={inboxSearch}
+              onChange={e => setInboxSearch(e.target.value)}
+              placeholder="Filter by merchant or description…"
+              className="text-xs px-3 py-1.5 rounded w-full"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
+            />
+          </div>
           {inboxLoading ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>Loading…</p>
-          ) : inboxItems.length === 0 ? (
+          ) : inboxFiltered.length === 0 ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>
-              {inboxCount === 0 ? 'All caught up — no uncategorized transactions.' : 'No items on this page.'}
+              {inboxCount === 0 ? 'All caught up — no uncategorized transactions.' : inboxSearch ? 'No matches.' : 'No items on this page.'}
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {inboxItems.map(tx => (
+              {inboxFiltered.map(tx => (
                 <InboxRow
                   key={tx.id}
                   tx={tx}
@@ -825,43 +864,176 @@ export default function FinancesView({
         </div>
       )}
 
-      {/* ── Balances ── */}
-      {tab === 'balances' && (
-        <div>
-          <SectionLabel>Balance Snapshots</SectionLabel>
-          {snapshots.length === 0 ? (
-            <p className="text-sm" style={{ color: 'var(--text-faint)' }}>No balance snapshots recorded yet.</p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {snapshots.map(s => {
-                const bal = Number(s.balance);
-                const busd = s.balance_usd != null ? Number(s.balance_usd) : null;
-                return (
-                  <div key={s.id} className="flex items-center gap-3 rounded-lg px-4 py-2.5"
-                    style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 80 }}>{s.date}</span>
-                    <span className="text-sm flex-1" style={{ color: 'var(--text)' }}>{s.account}</span>
-                    {s.notes && <span className="text-xs truncate" style={{ color: 'var(--text-faint)', maxWidth: 200 }}>{s.notes}</span>}
-                    <span className="text-sm font-medium shrink-0"
-                      style={{ color: bal >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)' }}>
-                      {fmt(bal, s.currency)}
-                    </span>
-                    {busd != null && s.currency !== 'USD' && (
-                      <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>({fmtUsd(busd)})</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Holdings ── */}
-      {tab === 'holdings' && <HoldingsTab holdings={manualHoldings} asOfDate={manualHoldingsDate} onRefresh={() => router.refresh()} />}
+      {/* ── Balances (net worth snapshots) ── */}
+      {tab === 'balances' && <BalancesTab snapshots={netWorthSnapshots} onRefresh={() => router.refresh()} />}
 
       {/* ── FX Rates ── */}
       {tab === 'fx' && <FxRatesTab rates={fxRates} />}
+    </div>
+  );
+}
+
+// ── BalancesTab (net worth snapshots) ─────────────────────────────────────────
+
+function BalancesTab({ snapshots, onRefresh }: { snapshots: NetWorthSnapshot[]; onRefresh: () => void }) {
+  const router = useRouter();
+  const today  = new Date().toISOString().slice(0, 10);
+
+  const [showForm, setShowForm]     = useState(false);
+  const [snapshotDate, setDate]     = useState(today);
+  const [crypto, setCrypto]         = useState('');
+  const [stocks, setStocks]         = useState('');
+  const [bank, setBank]             = useState('');
+  const [cash, setCash]             = useState('');
+  const [assets, setAssets]         = useState('');
+  const [notes, setNotes]           = useState('');
+  const [saving, setSaving]         = useState(false);
+  const [errorMsg, setErrorMsg]     = useState<string | null>(null);
+
+  function resetForm() {
+    setDate(today); setCrypto(''); setStocks(''); setBank(''); setCash(''); setAssets(''); setNotes('');
+    setShowForm(false); setErrorMsg(null);
+  }
+
+  async function save() {
+    setSaving(true); setErrorMsg(null);
+    try {
+      const res = await fetch('/api/finances/net-worth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          snapshot_date:       snapshotDate,
+          crypto_value:        parseFloat(crypto   || '0'),
+          stocks_value:        parseFloat(stocks   || '0'),
+          bank_accounts_value: parseFloat(bank     || '0'),
+          cash_value:          parseFloat(cash     || '0'),
+          assets_value:        parseFloat(assets   || '0'),
+          notes:               notes || null,
+        }),
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErrorMsg(d.error ?? 'Save failed'); return; }
+      resetForm(); onRefresh();
+    } catch (err) { setErrorMsg(err instanceof Error ? err.message : 'Save failed'); }
+    finally { setSaving(false); }
+  }
+
+  async function deleteSnapshot(id: string) {
+    setErrorMsg(null);
+    try {
+      const res = await fetch(`/api/finances/net-worth?id=${id}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setErrorMsg(d.error ?? 'Delete failed'); return; }
+      onRefresh();
+    } catch (err) { setErrorMsg(err instanceof Error ? err.message : 'Delete failed'); }
+  }
+
+  const latestSnap = snapshots[0];
+  const netWorth   = latestSnap
+    ? parseFloat(latestSnap.crypto_value) + parseFloat(latestSnap.stocks_value) +
+      parseFloat(latestSnap.bank_accounts_value) + parseFloat(latestSnap.cash_value) +
+      parseFloat(latestSnap.assets_value)
+    : null;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <SectionLabel>Net Worth Snapshots</SectionLabel>
+          {netWorth !== null && (
+            <p className="text-sm font-medium" style={{ color: 'var(--cyan)', fontFamily: 'var(--font-mono)' }}>
+              Latest: {fmtUsd(netWorth)}
+              {latestSnap && <span className="text-xs ml-2" style={{ color: 'var(--text-faint)' }}>({latestSnap.snapshot_date})</span>}
+            </p>
+          )}
+        </div>
+        <button onClick={() => setShowForm(true)}
+          className="text-xs px-3 py-1.5 rounded"
+          style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
+          + Add snapshot
+        </button>
+      </div>
+
+      {errorMsg && <p className="text-xs mb-2" style={{ color: 'var(--red)' }}>{errorMsg}</p>}
+
+      {showForm && (
+        <div className="rounded-lg p-4 mb-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Add net worth snapshot</p>
+            <button onClick={resetForm} className="text-xs" style={{ color: 'var(--text-faint)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="text-xs" style={{ color: 'var(--text-faint)', minWidth: 90 }}>Date</label>
+              <input type="date" value={snapshotDate} onChange={e => setDate(e.target.value)} className="text-xs px-2 py-1.5 rounded"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </div>
+            {[
+              { label: 'Crypto ($)', val: crypto,  set: setCrypto },
+              { label: 'Stocks ($)', val: stocks,  set: setStocks },
+              { label: 'Bank ($)',   val: bank,    set: setBank   },
+              { label: 'Cash ($)',   val: cash,    set: setCash   },
+              { label: 'Assets ($)', val: assets,  set: setAssets },
+            ].map(({ label, val, set }) => (
+              <div key={label} className="flex items-center gap-2">
+                <label className="text-xs" style={{ color: 'var(--text-faint)', minWidth: 90 }}>{label}</label>
+                <input type="number" value={val} onChange={e => set(e.target.value)} placeholder="0" className="text-xs px-2 py-1.5 rounded"
+                  style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', width: 140 }} />
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <label className="text-xs" style={{ color: 'var(--text-faint)', minWidth: 90 }}>Notes</label>
+              <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="optional" className="text-xs px-2 py-1.5 rounded flex-1"
+                style={{ background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+            </div>
+          </div>
+          <div className="flex justify-end mt-3">
+            <button onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded"
+              style={{ background: 'rgba(6,182,212,0.15)', color: 'var(--cyan)', cursor: 'pointer' }}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {errorMsg && <p className="text-xs mt-2" style={{ color: 'var(--red)' }}>{errorMsg}</p>}
+        </div>
+      )}
+
+      {snapshots.length === 0 && !showForm ? (
+        <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>No snapshots yet. Add one to track your net worth over time.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {snapshots.map(s => {
+            const total = parseFloat(s.crypto_value) + parseFloat(s.stocks_value) +
+                          parseFloat(s.bank_accounts_value) + parseFloat(s.cash_value) +
+                          parseFloat(s.assets_value);
+            return (
+              <div key={s.id} className="rounded-lg px-4 py-3 group"
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>{s.snapshot_date}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-medium" style={{ color: 'var(--cyan)', fontFamily: 'var(--font-mono)' }}>{fmtUsd(total)}</span>
+                    <button onClick={() => deleteSnapshot(s.id)}
+                      className="text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ color: 'var(--red)', cursor: 'pointer' }}>×</button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 flex-wrap">
+                  {[
+                    { label: '🔮 Crypto', val: s.crypto_value },
+                    { label: '📈 Stocks', val: s.stocks_value },
+                    { label: '🏦 Bank',   val: s.bank_accounts_value },
+                    { label: '💵 Cash',   val: s.cash_value },
+                    { label: '🏠 Assets', val: s.assets_value },
+                  ].filter(({ val }) => parseFloat(val) > 0).map(({ label, val }) => (
+                    <span key={label} className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                      {label} <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{fmtUsd(parseFloat(val))}</span>
+                    </span>
+                  ))}
+                  {s.notes && <span className="text-xs" style={{ color: 'var(--text-faint)', fontStyle: 'italic' }}>{s.notes}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

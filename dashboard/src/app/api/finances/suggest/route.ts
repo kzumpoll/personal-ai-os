@@ -4,8 +4,8 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const ALLOWED_CATEGORIES = [
   'Income', 'Transfers', 'FX', 'Banking & Fees', 'Transport', 'Flights',
-  'Stays', 'Food & Coffee', 'Groceries', 'Fitness & Padel', 'Health & Care',
-  'Software & AI', 'Phone & Connectivity', 'Education', 'Shopping',
+  'Stays', 'Rent', 'Food & Coffee', 'Food Delivery', 'Groceries', 'Fitness & Padel',
+  'Health & Care', 'Software & AI', 'Phone & Connectivity', 'Education', 'Shopping',
   'Entertainment & Events', 'Tea & Hobbies', 'Business Services',
   'Creator Economy', 'Within Expenses', 'Uncategorized',
 ];
@@ -29,6 +29,8 @@ const RULES: Array<{ patterns: string[]; category: string }> = [
   { patterns: ['cinema', 'movie', 'concert', 'event', 'ticket', 'vox ', 'reel cinemas', 'dubai frame', 'global village', 'museum', 'expo', 'theme park'], category: 'Entertainment & Events' },
   { patterns: ['within', 'tea house', 'tea shop', 'tea blend', 'teaware', 'tea ceremony'], category: 'Within Expenses' },
   { patterns: ['beehiiv', 'substack', 'youtube', 'patreon', 'ko-fi', 'gumroad', 'lemon squeezy', 'camera', 'lens', 'tripod', 'microphone', 'studio'], category: 'Creator Economy' },
+  { patterns: ['rent', 'landlord', 'lease', 'tenancy', 'housing'], category: 'Rent' },
+  { patterns: ['talabat', 'deliveroo', 'zomato', 'noon food', 'uber eats', 'doordash', 'delivery', 'food delivery'], category: 'Food Delivery' },
 ];
 
 function applyRules(merchant: string): string | null {
@@ -119,6 +121,8 @@ Guidelines:
 - Currency exchange (Wise, FX bureau, exchange) → "FX"
 - Bank-to-bank or wallet transfers → "Transfers"
 - Software & AI: Anthropic, Claude, OpenAI, ChatGPT, GitHub, Notion, Figma, Linear, Cursor, Vercel, Railway, AWS, Adobe, Spotify, Netflix, Dropbox, iCloud, Google One, any SaaS/API/cloud service
+- Rent: monthly rent payments, landlord payments, lease payments
+- Food Delivery: Talabat, Deliveroo, Zomato, Noon Food, Uber Eats, any delivery platform
 - Within Expenses: anything related to the tea brand "Within" or within.ae
 - Creator Economy: Beehiiv, Substack, YouTube, camera/studio equipment, content creation tools
 - Use "Uncategorized" only if genuinely unclear (confidence < 0.5)

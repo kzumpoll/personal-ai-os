@@ -55,6 +55,18 @@ interface FxRate {
   is_estimated: boolean;
 }
 
+interface NetWorthSnapshot {
+  id: string;
+  snapshot_date: string;
+  crypto_value: string;
+  stocks_value: string;
+  bank_accounts_value: string;
+  cash_value: string;
+  assets_value: string;
+  notes: string | null;
+  created_at: string;
+}
+
 interface SpendRow {
   name: string;
   color: string;
@@ -93,7 +105,7 @@ async function getData() {
   const startOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
   const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
 
-  const [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR] = await Promise.all([
+  const [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR, netWorthR] = await Promise.all([
     safeRows('categories', () =>
       pool.query<Category>('SELECT id, name, color, is_income FROM finance_categories ORDER BY is_income, name')
     ),
@@ -167,6 +179,17 @@ async function getData() {
     safeRows('fx', () =>
       pool.query<FxRate>('SELECT id, date::text AS date, currency, rate_to_usd, is_estimated FROM fx_rates ORDER BY date DESC, currency ASC LIMIT 50')
     ),
+    safeRows('net_worth', () =>
+      pool.query<NetWorthSnapshot>(
+        `SELECT id, snapshot_date::text AS snapshot_date,
+                crypto_value::text, stocks_value::text,
+                bank_accounts_value::text, cash_value::text,
+                assets_value::text, notes, created_at::text AS created_at
+         FROM net_worth_snapshots
+         ORDER BY snapshot_date DESC, created_at DESC
+         LIMIT 36`
+      )
+    ),
   ]);
 
   const netRow = netFlowR.rows[0] ?? {};
@@ -175,7 +198,7 @@ async function getData() {
   const income_usd = parseFloat(netRow.income_usd ?? '0');
   const expenses_usd = parseFloat(netRow.expenses_usd ?? '0');
 
-  const errors = [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR]
+  const errors = [categoriesR, uncategorizedR, inboxTotalR, categorizedR, spendR, netFlowR, snapshotsR, manualR, fxR, netWorthR]
     .map(r => r.error).filter(Boolean) as string[];
 
   const result = {
@@ -189,6 +212,7 @@ async function getData() {
     manualHoldings: manualR.rows,
     manualHoldingsDate: manualR.rows[0]?.as_of_date ?? null,
     fxRates: fxR.rows,
+    netWorthSnapshots: netWorthR.rows,
     dbErrors: errors,
     startOfMonth,
     endOfMonth,
