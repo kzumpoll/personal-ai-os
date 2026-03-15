@@ -58,7 +58,7 @@ import { getJournalByDate } from '../db/queries/journals';
 import { getLocalToday, getLocalTomorrow, getLocalYesterday } from '../services/localdate';
 import { createWin, getWinsForDate } from '../db/queries/wins';
 import { randomUUID } from 'crypto';
-import { isFinanceCaption, detectSource, parseRevolutCsv } from '../services/financeParser';
+import { isFinanceCaption, detectSource, parseRevolutCsv, parseWioCsv, NormalizedTransaction } from '../services/financeParser';
 import { createStatement, insertImportedTransactions } from '../db/queries/finances';
 
 // ---------------------------------------------------------------------------
@@ -1746,12 +1746,7 @@ bot.on('document', async (ctx) => {
     console.log('[bot:doc] source detection result:', source);
 
     if (source === 'unknown') {
-      await ctx.reply("I received your finance file. Is this from Revolut or Wio?");
-      return;
-    }
-
-    if (source === 'wio') {
-      await ctx.reply('Wio CSV parsing is not implemented yet. Only Revolut CSVs are supported right now.');
+      await ctx.reply("I received your finance file, but couldn't detect the source. Add a caption like \"revolut statement\" or \"wio statement\" and resend.");
       return;
     }
 
@@ -1771,11 +1766,16 @@ bot.on('document', async (ctx) => {
 
     const csvText = fileBuffer.toString('utf-8');
 
-    // --- Parse CSV ---
+    // --- Parse CSV (route by source) ---
     console.log('[bot:doc] parser start | source:', source);
-    let rows;
+    let rows: NormalizedTransaction[];
     try {
-      rows = parseRevolutCsv(csvText);
+      if (source === 'revolut') {
+        rows = parseRevolutCsv(csvText);
+      } else {
+        // source === 'wio' — handles both WIO Personal and WIO Business (same schema)
+        rows = parseWioCsv(csvText);
+      }
       console.log('[bot:doc] parser result | row count:', rows.length);
     } catch (parseErr) {
       const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
@@ -1785,7 +1785,7 @@ bot.on('document', async (ctx) => {
     }
 
     if (rows.length === 0) {
-      await ctx.reply('The CSV contained no importable transactions (all rows may be PENDING or FAILED).');
+      await ctx.reply('The CSV contained no importable transactions. For Revolut, all rows may be non-COMPLETED.');
       return;
     }
 
@@ -1816,9 +1816,10 @@ bot.on('document', async (ctx) => {
     }
 
     // --- Final reply ---
+    const sourceName = source === 'wio' ? 'WIO' : 'Revolut';
     const skipped = rows.length - inserted;
     const skippedNote = skipped > 0 ? `\n${skipped} duplicate(s) skipped.` : '';
-    const reply = `Imported ${inserted} transactions from Revolut CSV.\n\nBatch ID: ${importBatchId.slice(0, 8)}...${skippedNote}`;
+    const reply = `Imported ${inserted} transactions from ${sourceName} CSV.\n\nBatch ID: ${importBatchId.slice(0, 8)}...${skippedNote}`;
     console.log('[bot:doc] final reply sent | inserted:', inserted, '| skipped:', skipped);
     await ctx.reply(reply);
 

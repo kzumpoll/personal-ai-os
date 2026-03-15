@@ -1,13 +1,12 @@
 /**
  * Finance CSV parser service.
  *
- * Supported sources: Revolut
- * Future: Wio (not yet implemented — prompts user)
+ * Supported sources: Revolut, WIO (Personal + Business)
  *
  * Flow:
  *   1. detectSource()  — infers bank from caption + filename
  *   2. isFinanceCaption() — gates whether the document is finance-related
- *   3. parseRevolutCsv() — parses Revolut export CSV into NormalizedTransaction[]
+ *   3. parseRevolutCsv() / parseWioCsv() — parse CSV into NormalizedTransaction[]
  *   4. Caller inserts via insertImportedTransactions()
  */
 
@@ -22,6 +21,7 @@ export interface NormalizedTransaction {
   fee: number;
   direction: 'credit' | 'debit';
   external_id: string;      // deterministic hash for dedup across re-imports
+  account?: string;         // account name (WIO and future sources)
 }
 
 export type FinanceSource = 'revolut' | 'wio' | 'unknown';
@@ -148,6 +148,103 @@ export function parseRevolutCsv(csvText: string): NormalizedTransaction[] {
       fee,
       direction,
       external_id,
+    });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// WIO CSV parser
+// ---------------------------------------------------------------------------
+// Handles both WIO Personal and WIO Business — same column schema:
+//   Account name, Account type, Account IBAN, Account number, Card number,
+//   Account currency, Transaction type, Date, Ref. number, Description,
+//   Amount, Balance, Original ref. number, Notes
+//
+// Account subtype (personal vs business) is inferred from the "Account type"
+// column value in the CSV and stored in merchant_raw as context.
+// Date format: DD/MM/YYYY or DD/MM/YYYY HH:MM:SS (local wall clock, no TZ).
+// No "State" column — all rows are considered final/completed.
+// ---------------------------------------------------------------------------
+
+function parseWioDate(s: string): string {
+  if (!s) return '';
+  const clean = s.trim();
+  // DD/MM/YYYY or DD/MM/YYYY HH:MM:SS
+  const m = clean.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  // ISO or "YYYY-MM-DD ..." fallback
+  return clean.split(/[ T]/)[0];
+}
+
+export function parseWioCsv(csvText: string): NormalizedTransaction[] {
+  const lines = csvText.replace(/\r/g, '').split('\n').filter((l) => l.trim());
+  if (lines.length < 2) throw new Error('CSV appears empty — no data rows found');
+
+  // Normalize headers: lowercase, collapse whitespace/dots/dashes to single underscore
+  const headers = parseCSVLine(lines[0]).map((h) =>
+    h.toLowerCase().trim().replace(/[\s.\-]+/g, '_').replace(/_+/g, '_')
+  );
+
+  if (!headers.includes('amount')) throw new Error('CSV is missing an "Amount" column — is this a WIO export?');
+  if (!headers.includes('description')) throw new Error('CSV is missing a "Description" column — is this a WIO export?');
+  if (!headers.includes('date')) throw new Error('CSV is missing a "Date" column — is this a WIO export?');
+
+  const col = (name: string) => headers.indexOf(name);
+
+  const accountNameIdx = col('account_name');
+  const accountTypeIdx = col('account_type');
+  const accountCurrIdx = col('account_currency');
+  const txTypeIdx      = col('transaction_type');
+  const dateIdx        = col('date');
+  const refIdx         = col('ref_number');        // "Ref. number" → "ref_number"
+  const descIdx        = col('description');
+  const amountIdx      = col('amount');
+  const notesIdx       = col('notes');
+
+  const results: NormalizedTransaction[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const row = parseCSVLine(lines[i]);
+    if (row.length < 3) continue;
+
+    const amountStr = (row[amountIdx] ?? '').trim();
+    if (!amountStr) continue;
+
+    const amount = parseFloat(amountStr.replace(/[^-\d.]/g, ''));
+    if (isNaN(amount)) continue;
+
+    const rawDate  = dateIdx >= 0 ? (row[dateIdx] ?? '').trim() : '';
+    const txDate   = parseWioDate(rawDate);
+    if (!txDate) continue;
+
+    const desc      = descIdx >= 0 ? (row[descIdx] ?? '').trim() : '';
+    const txType    = txTypeIdx >= 0 ? (row[txTypeIdx] ?? '').trim() : '';
+    const refNum    = refIdx >= 0 ? (row[refIdx] ?? '').trim() : '';
+    const currency  = accountCurrIdx >= 0 ? (row[accountCurrIdx] ?? 'AED').trim() : 'AED';
+    const accountNm = accountNameIdx >= 0 ? (row[accountNameIdx] ?? '').trim() : '';
+
+    const direction: 'credit' | 'debit' = amount >= 0 ? 'credit' : 'debit';
+
+    // Prefer ref number as dedup key — it's unique per transaction in WIO.
+    // Fall back to hashing stable content fields when ref is absent.
+    const hashInput = refNum
+      ? [refNum, txDate, amountStr]
+      : [txDate, desc, amountStr, currency];
+    const external_id = `wio_${hashFields(hashInput)}`;
+
+    results.push({
+      source_name:      'wio',
+      transaction_date: txDate,
+      amount,
+      currency,
+      description_raw:  desc,
+      merchant_raw:     txType || undefined,
+      fee:              0,
+      direction,
+      external_id,
+      account:          accountNm || undefined,
     });
   }
 

@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
         `SELECT t.id,
                 t.date::text    AS date,
                 t.description,
+                t.merchant_raw,
                 t.amount::text  AS amount,
                 t.currency,
                 t.category_id,

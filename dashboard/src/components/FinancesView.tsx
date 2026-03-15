@@ -729,18 +729,42 @@ export default function FinancesView({
             <div className="flex flex-col gap-1">
               {txItems.map(tx => {
                 const amt = typeof tx.amount === 'string' ? parseFloat(tx.amount) : tx.amount;
+                const isCredit = tx.direction === 'credit' || (tx.direction == null && amt >= 0);
+                // secondary: WIO/Revolut transaction type from merchant_raw; fall back to direction label
+                const secondary = formatTxType(tx.merchant_raw ?? tx.direction);
                 return (
-                  <div key={tx.id} className="flex items-center gap-3 rounded-lg px-4 py-2.5"
+                  <div key={tx.id} className="rounded-lg px-4 py-2.5"
                     style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                    <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 88 }}>{fmtDate(tx.date)}</span>
-                    <span className="text-sm flex-1 truncate" style={{ color: 'var(--text)' }}>{(tx.merchant_raw ?? tx.description).trim()}</span>
-                    {tx.category_name && (
-                      <span className="text-xs px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(139,92,246,0.1)', color: 'var(--violet)' }}>{tx.category_name}</span>
-                    )}
-                    <span className="text-sm font-medium shrink-0"
-                      style={{ color: amt >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)' }}>
-                      {amt >= 0 ? '+' : ''}{fmt(amt, tx.currency)}
-                    </span>
+                    <div className="flex items-center gap-3">
+                      {/* Date */}
+                      <span className="text-xs shrink-0"
+                        style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 88 }}>
+                        {fmtDate(tx.date)}
+                      </span>
+                      {/* Description (primary) + transaction type (secondary muted) */}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate font-medium" style={{ color: 'var(--text)' }}>
+                          {tx.description}
+                        </p>
+                        {secondary && (
+                          <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-faint)' }}>
+                            {secondary}
+                          </p>
+                        )}
+                      </div>
+                      {/* Category badge */}
+                      {tx.category_name && (
+                        <span className="text-xs px-2 py-0.5 rounded-full shrink-0"
+                          style={{ background: 'rgba(139,92,246,0.1)', color: 'var(--violet)' }}>
+                          {tx.category_name}
+                        </span>
+                      )}
+                      {/* Amount */}
+                      <span className="text-sm font-medium shrink-0"
+                        style={{ color: isCredit ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-mono)' }}>
+                        {isCredit ? '+' : ''}{fmt(Math.abs(amt), tx.currency)}
+                      </span>
+                    </div>
                   </div>
                 );
               })}

@@ -171,6 +171,7 @@ export interface ImportedTransaction {
   external_id: string;
   import_batch_id: string;
   statement_id: string;
+  account?: string;         // account name (WIO and future sources)
 }
 
 /**
@@ -193,7 +194,7 @@ export async function insertImportedTransactions(transactions: ImportedTransacti
       t.description_raw,            // 2 description
       t.amount,                     // 3 amount
       t.currency,                   // 4 currency
-      null,                         // 5 account — set later via categorization
+      t.account ?? null,            // 5 account name (WIO) or null (Revolut)
       t.direction === 'credit',     // 6 is_income
       t.statement_id,               // 7 statement_id
       t.source_name,                // 8 source_name
