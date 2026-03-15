@@ -867,15 +867,19 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
 
     case 'create_reminder': {
       const { title, body, scheduled_at, recipient_name, suggested_message, draft_message } = intent.data;
+      console.log(`[REMINDER] create request: title="${title}" scheduled_at="${scheduled_at}"`);
       const { createReminder } = await import('../db/queries/reminders');
       const { wallClockToUtc } = await import('../services/localdate');
       const chatId = parseTelegramChatId('create_reminder');
+      console.log(`[REMINDER] parsed chatId=${chatId}`);
       if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders. Check TELEGRAM_USER_CHAT_ID in Railway.' };
       const effectiveDraft = draft_message ?? suggested_message ?? null;
       const userTz = process.env.USER_TZ ?? 'UTC';
       // wallClockToUtc strips any Z/offset the LLM may have appended, then
       // converts from USER_TZ wall-clock to UTC for TIMESTAMPTZ storage.
       const scheduledUtc = wallClockToUtc(scheduled_at, userTz);
+      console.log(`[REMINDER] wallClock→UTC: input="${scheduled_at}" tz="${userTz}" output="${scheduledUtc}"`);
+      console.log(`[REMINDER] DB insert start: chat_id=${chatId} scheduled_at=${scheduledUtc}`);
       const reminder = await createReminder({
         chat_id: chatId,
         title,
@@ -886,6 +890,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
         suggested_message: suggested_message ?? null,
         draft_message: effectiveDraft,
       });
+      console.log(`[REMINDER] DB insert success: id=${reminder.id} scheduled_at=${reminder.scheduled_at} status=${reminder.status}`);
       await logMutation({
         action: 'create',
         table_name: 'reminders',

@@ -43,16 +43,19 @@ function reminderButtons(id: string) {
 }
 
 async function deliverReminders(bot: Telegraf): Promise<void> {
+  console.log('[REMINDER] scheduler tick — querying due reminders');
   try {
     const [due, snoozedDue] = await Promise.all([
       getDueReminders(),
       getSnoozedDueReminders(),
     ]);
 
+    console.log(`[REMINDER] found ${due.length} due + ${snoozedDue.length} snoozed-due reminders`);
     const all = [...due, ...snoozedDue];
     if (all.length === 0) return;
 
     for (const reminder of all) {
+      console.log(`[REMINDER] sending reminder ${reminder.id} "${reminder.title}" to chat_id=${reminder.chat_id} scheduled_at=${reminder.scheduled_at}`);
       try {
         const text = formatReminderMessage(reminder);
         await bot.telegram.sendMessage(
@@ -60,14 +63,15 @@ async function deliverReminders(bot: Telegraf): Promise<void> {
           text,
           reminderButtons(reminder.id)
         );
+        console.log(`[REMINDER] Telegram send success for ${reminder.id}`);
         await markReminderSent(reminder.id);
-        console.log(`[reminderScheduler] delivered reminder ${reminder.id}: ${reminder.title}`);
+        console.log(`[REMINDER] marked sent: ${reminder.id} "${reminder.title}"`);
       } catch (err) {
-        console.error(`[reminderScheduler] failed to deliver ${reminder.id}:`, err instanceof Error ? err.message : err);
+        console.error(`[REMINDER] failed to send ${reminder.id} "${reminder.title}":`, err instanceof Error ? err.message : err);
       }
     }
   } catch (err) {
-    console.error('[reminderScheduler] poll error:', err instanceof Error ? err.message : err);
+    console.error('[REMINDER] poll error:', err instanceof Error ? err.message : err);
   }
 }
 

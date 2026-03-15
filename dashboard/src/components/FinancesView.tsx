@@ -526,14 +526,11 @@ export default function FinancesView({
   }
 
   // ── Summary card values ──
-  // Prefer latest net worth snapshot; fall back to old manual holdings data
+  // Source of truth: net_worth_snapshots (backfilled from manual holdings by migration 030)
   const latestNW = netWorthSnapshots[0];
-  const cashTotal        = latestNW ? parseFloat(latestNW.bank_accounts_value) + parseFloat(latestNW.cash_value)
-                                    : snapshots.reduce((s, r) => s + Number(r.balance_usd ?? 0), 0);
-  const manualCryptoTotal = latestNW ? parseFloat(latestNW.crypto_value)
-                                     : manualHoldings.filter(h => h.asset_type === 'crypto').reduce((s, h) => s + Number(h.usd_value), 0);
-  const manualStockTotal  = latestNW ? parseFloat(latestNW.stocks_value)
-                                     : manualHoldings.filter(h => h.asset_type === 'stock').reduce((s, h) => s + Number(h.usd_value), 0);
+  const cashTotal         = parseFloat(latestNW?.bank_accounts_value ?? '0') + parseFloat(latestNW?.cash_value ?? '0');
+  const manualCryptoTotal = parseFloat(latestNW?.crypto_value ?? '0');
+  const manualStockTotal  = parseFloat(latestNW?.stocks_value ?? '0');
 
   // ── Tabs ──
   const tabs: { key: Tab; label: string; count?: number }[] = [
