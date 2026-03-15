@@ -58,7 +58,7 @@ export default async function LifeOSPage() {
   return (
     <div>
       <PageHeader
-        title="Life OS"
+        title="Compass"
         subtitle={`${activeGoals.length} active goals · ${activeManifestations.length} active manifestations`}
       />
       <LifeOSView identity={identity} goals={goals} manifestations={manifestations} />

@@ -9,6 +9,7 @@ import { editImage, isImageEditConfigured } from './services/imageEdit';
 import { startScheduler } from './services/scheduler';
 import { startReminderScheduler } from './services/reminderScheduler';
 import { startDailyRoiScheduler } from './services/dailyRoi';
+import { startMitCheckinScheduler } from './services/mitCheckin';
 import { cleanupExpiredSessions } from './telegram/session';
 
 const app = express();
@@ -291,6 +292,9 @@ async function main() {
 
   // Daily 8AM ROI message (Mon-Sat)
   startDailyRoiScheduler(bot);
+
+  // 1PM MIT check-in (Mon-Sat)
+  startMitCheckinScheduler(bot);
 
   console.log('=== startup complete ===\n');
 }

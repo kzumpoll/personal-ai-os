@@ -262,13 +262,15 @@ function DateFilter({
 // ── InboxRow ──────────────────────────────────────────────────────────────────
 
 function InboxRow({
-  tx, categories, suggestion, suggestionsLoading, onCategorize,
+  tx, categories, suggestion, suggestionsLoading, onCategorize, selected, onSelect,
 }: {
   tx: Transaction;
   categories: Category[];
   suggestion: Suggestion | undefined;
   suggestionsLoading: boolean;
   onCategorize: (txId: string, categoryId: string) => void;
+  selected: boolean;
+  onSelect: (txId: string) => void;
 }) {
   const suggestedCat = suggestion ? categories.find(c => c.name === suggestion.category) : undefined;
   const [selectedCatId, setSelectedCatId] = useState(suggestedCat?.id ?? '');
@@ -287,8 +289,22 @@ function InboxRow({
   const incomeCats  = categories.filter(c =>  c.is_income);
 
   return (
-    <div className="rounded-lg px-4 py-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-      <div className="flex items-center gap-3 flex-wrap">
+    <div
+      className="rounded-lg px-3 py-3"
+      style={{
+        background: selected ? 'var(--surface-3)' : 'var(--surface)',
+        border: `1px solid ${selected ? 'var(--cyan)' : 'var(--border)'}`,
+      }}
+    >
+      <div className="flex items-center gap-2.5 flex-wrap">
+        {/* Checkbox */}
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onSelect(tx.id)}
+          style={{ cursor: 'pointer', accentColor: 'var(--cyan)', flexShrink: 0 }}
+        />
+
         {/* Date */}
         <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)', minWidth: 88 }}>
           {fmtDate(tx.date)}
@@ -313,18 +329,36 @@ function InboxRow({
           {fmt(Math.abs(amt), tx.currency)}
         </span>
 
-        {/* Category selector + confirm */}
+        {/* Category controls */}
         {suggestionsLoading ? (
           <span className="text-xs shrink-0" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>…</span>
         ) : (
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+            {/* Quick chip: AI suggestion (one-click) */}
+            {suggestedCat && (
+              <button
+                onClick={() => onCategorize(tx.id, suggestedCat.id)}
+                title={`Suggested: ${suggestion?.reason ?? ''}`}
+                className="text-xs px-2.5 py-1 rounded-full font-medium"
+                style={{
+                  background: 'rgba(6,182,212,0.12)',
+                  color: 'var(--cyan)',
+                  border: '1px solid rgba(6,182,212,0.3)',
+                  cursor: 'pointer',
+                }}
+              >
+                {catLabel(suggestedCat.name)}
+              </button>
+            )}
+
+            {/* Dropdown + confirm for manual selection */}
             <select
               value={selectedCatId}
               onChange={ev => setSelectedCatId(ev.target.value)}
               className="text-xs px-2 py-1 rounded"
-              style={{ background: 'var(--surface-3)', border: '1px solid var(--border)', color: 'var(--text)', maxWidth: 180, cursor: 'pointer' }}
+              style={{ background: 'var(--surface-3)', border: '1px solid var(--border)', color: 'var(--text)', maxWidth: 160, cursor: 'pointer' }}
             >
-              <option value="">Pick category…</option>
+              <option value="">Other…</option>
               <optgroup label="Income">
                 {incomeCats.map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
               </optgroup>
@@ -332,17 +366,18 @@ function InboxRow({
                 {expenseCats.map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
               </optgroup>
             </select>
-            <button
-              disabled={!selectedCatId}
-              onClick={() => selectedCatId && onCategorize(tx.id, selectedCatId)}
-              className="text-xs px-2.5 py-1 rounded font-medium"
-              style={{
-                background: selectedCatId ? 'rgba(16,185,129,0.15)' : 'var(--surface-3)',
-                color: selectedCatId ? 'var(--green)' : 'var(--text-faint)',
-                cursor: selectedCatId ? 'pointer' : 'default',
-                border: '1px solid transparent',
-              }}
-            >✓</button>
+            {selectedCatId && (
+              <button
+                onClick={() => onCategorize(tx.id, selectedCatId)}
+                className="text-xs px-2.5 py-1 rounded font-medium"
+                style={{
+                  background: 'rgba(16,185,129,0.15)',
+                  color: 'var(--green)',
+                  cursor: 'pointer',
+                  border: '1px solid transparent',
+                }}
+              >✓</button>
+            )}
           </div>
         )}
       </div>
@@ -468,7 +503,53 @@ export default function FinancesView({
       setInboxItems(prev => prev.filter(t => t.id !== txId));
       setInboxCount(prev => Math.max(0, prev - 1));
       setSuggestions(prev => { const next = { ...prev }; delete next[txId]; return next; });
+      setSelectedIds(prev => { const next = new Set(prev); next.delete(txId); return next; });
     } catch { /* swallow */ }
+  }
+
+  // ── Bulk selection state ──
+  const [selectedIds, setSelectedIds]   = useState<Set<string>>(new Set());
+  const [bulkCatId, setBulkCatId]       = useState('');
+  const [bulkLoading, setBulkLoading]   = useState(false);
+
+  function toggleSelect(txId: string) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(txId)) next.delete(txId); else next.add(txId);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.size === inboxItems.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(inboxItems.map(t => t.id)));
+    }
+  }
+
+  async function bulkCategorize() {
+    if (!bulkCatId || selectedIds.size === 0) return;
+    setBulkLoading(true);
+    try {
+      await fetch('/api/finances/bulk-categorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds), category_id: bulkCatId }),
+      });
+      const removedArr = Array.from(selectedIds);
+      const removedSet = new Set(removedArr);
+      setInboxItems(prev => prev.filter(t => !removedSet.has(t.id)));
+      setInboxCount(prev => Math.max(0, prev - removedArr.length));
+      setSuggestions(prev => {
+        const next = { ...prev };
+        removedArr.forEach(id => { delete next[id]; });
+        return next;
+      });
+      setSelectedIds(new Set());
+      setBulkCatId('');
+    } catch { /* swallow */ }
+    finally { setBulkLoading(false); }
   }
 
   // ── Transactions tab state ──
@@ -658,6 +739,43 @@ export default function FinancesView({
               style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
             />
           </div>
+
+          {/* Bulk toolbar — shown when ≥1 selected */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg flex-wrap" style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)' }}>
+              <span className="text-xs font-medium" style={{ color: 'var(--cyan)' }}>{selectedIds.size} selected</span>
+              <select
+                value={bulkCatId}
+                onChange={e => setBulkCatId(e.target.value)}
+                className="text-xs px-2 py-1 rounded"
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)', cursor: 'pointer' }}
+              >
+                <option value="">Apply category…</option>
+                <optgroup label="Income">
+                  {categories.filter(c => c.is_income).map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
+                </optgroup>
+                <optgroup label="Expenses">
+                  {categories.filter(c => !c.is_income).map(c => <option key={c.id} value={c.id}>{catLabel(c.name)}</option>)}
+                </optgroup>
+              </select>
+              <button
+                disabled={!bulkCatId || bulkLoading}
+                onClick={bulkCategorize}
+                className="text-xs px-3 py-1 rounded font-medium"
+                style={{
+                  background: bulkCatId ? 'rgba(16,185,129,0.15)' : 'var(--surface-3)',
+                  color: bulkCatId ? 'var(--green)' : 'var(--text-faint)',
+                  cursor: bulkCatId ? 'pointer' : 'default',
+                }}
+              >{bulkLoading ? 'Applying…' : 'Apply'}</button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="text-xs px-2 py-1 rounded"
+                style={{ color: 'var(--text-faint)', cursor: 'pointer' }}
+              >Clear</button>
+            </div>
+          )}
+
           {inboxLoading ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>Loading…</p>
           ) : inboxItems.length === 0 ? (
@@ -666,6 +784,18 @@ export default function FinancesView({
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
+              {/* Select all toggle */}
+              <div className="flex items-center gap-2 px-3 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.size === inboxItems.length && inboxItems.length > 0}
+                  onChange={toggleSelectAll}
+                  style={{ cursor: 'pointer', accentColor: 'var(--cyan)' }}
+                />
+                <span className="text-xs" style={{ color: 'var(--text-faint)' }}>
+                  {selectedIds.size === inboxItems.length && inboxItems.length > 0 ? 'Deselect all' : 'Select all'}
+                </span>
+              </div>
               {inboxItems.map(tx => (
                 <InboxRow
                   key={tx.id}
@@ -674,6 +804,8 @@ export default function FinancesView({
                   suggestion={suggestions[tx.id]}
                   suggestionsLoading={suggestionsLoading}
                   onCategorize={categorize}
+                  selected={selectedIds.has(tx.id)}
+                  onSelect={toggleSelect}
                 />
               ))}
             </div>

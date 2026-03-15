@@ -33,8 +33,6 @@ interface Props {
   manifestations: Manifestation[];
 }
 
-type Tab = 'identity' | 'goals' | 'visionboard';
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function SectionLabel({ children, color = 'var(--text-muted)' }: { children: React.ReactNode; color?: string }) {
@@ -294,41 +292,31 @@ function GoalsSection({ goals }: { goals: Goal[] }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export default function LifeOSView({ identity, goals, manifestations }: Props) {
-  const [tab, setTab] = useState<Tab>('identity');
-
-  const tabs: { key: Tab; label: string }[] = [
-    { key: 'identity',   label: 'Identity' },
-    { key: 'goals',      label: 'Goals' },
-    { key: 'visionboard',label: 'Visionboard' },
-  ];
-
   return (
-    <div className="flex flex-col gap-6 max-w-3xl mx-auto">
-      {/* Tab bar */}
-      <div className="flex items-center gap-1" style={{ borderBottom: '1px solid var(--border)', paddingBottom: 1 }}>
-        {tabs.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className="text-xs px-3 py-2 rounded-t"
-            style={{
-              background:   tab === t.key ? 'var(--surface)' : 'transparent',
-              color:        tab === t.key ? 'var(--text)' : 'var(--text-muted)',
-              fontWeight:   tab === t.key ? 600 : 400,
-              border:       tab === t.key ? '1px solid var(--border)' : '1px solid transparent',
-              borderBottom: tab === t.key ? '1px solid var(--surface)' : '1px solid transparent',
-              marginBottom: -1,
-              cursor: 'pointer',
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+    <div className="flex flex-col gap-10 max-w-6xl mx-auto">
+      {/* Top: 2-column — Identity left, Visionboard right */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
+        <div>
+          <p className="mb-5" style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600 }}>
+            Identity
+          </p>
+          <IdentitySection initial={identity} />
+        </div>
+        <div>
+          <p className="mb-5" style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600 }}>
+            Visionboard
+          </p>
+          <ManifestationsView manifestations={manifestations} />
+        </div>
       </div>
 
-      {tab === 'identity'    && <IdentitySection initial={identity} />}
-      {tab === 'goals'       && <GoalsSection goals={goals} />}
-      {tab === 'visionboard' && <ManifestationsView manifestations={manifestations} />}
+      {/* Goals full width below */}
+      <div>
+        <p className="mb-5" style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--text-faint)', fontWeight: 600 }}>
+          Goals
+        </p>
+        <GoalsSection goals={goals} />
+      </div>
     </div>
   );
 }

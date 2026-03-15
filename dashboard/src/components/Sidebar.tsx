@@ -21,7 +21,7 @@ import {
   DollarSign,
   PanelLeftClose,
   PanelLeftOpen,
-  Layers,
+  Compass,
 } from 'lucide-react';
 import ClaudeCodeIndicator from './ClaudeCodeIndicator';
 
@@ -48,7 +48,7 @@ const navGroups = [
     label: 'Systems',
     items: [
       { href: '/projects',   label: 'Projects',   Icon: FolderKanban },
-      { href: '/lifeos',     label: 'Life OS',    Icon: Layers },
+      { href: '/lifeos',     label: 'Compass',    Icon: Compass },
       { href: '/resources',  label: 'Resources',  Icon: Bookmark },
       { href: '/finances',   label: 'Finances',   Icon: DollarSign },
       { href: '/search',     label: 'Search',     Icon: Search },

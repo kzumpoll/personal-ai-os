@@ -59,11 +59,17 @@ export default function FocusBlock({ journal, dayPlan, todayStr }: Props) {
     if (field === 'p1_done')  setP1Done(next);
     if (field === 'p2_done')  setP2Done(next);
 
+    // Resolve the associated focus text for task sync
+    const focusText =
+      field === 'mit_done' ? journal.mit :
+      field === 'p1_done'  ? journal.p1  :
+      field === 'p2_done'  ? journal.p2  : null;
+
     try {
       await fetch('/api/day-plans/focus', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_date: todayStr, field, done: next }),
+        body: JSON.stringify({ plan_date: todayStr, field, done: next, focus_text: focusText ?? undefined }),
       });
       router.refresh();
     } catch {
