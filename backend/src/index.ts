@@ -269,23 +269,30 @@ async function main() {
     }
   }
 
-  // Telegram bot — always use polling (Railway provides a persistent process)
-  await bot.launch();
+  // Graceful shutdown handlers must be registered before launch() because
+  // bot.launch() in Telegraf v4 returns a Promise that only resolves when the
+  // bot stops — await-ing it would block the entire startup sequence forever.
+  process.once('SIGINT',  () => { console.log('Shutting down (SIGINT)…');  bot.stop('SIGINT');  });
+  process.once('SIGTERM', () => { console.log('Shutting down (SIGTERM)…'); bot.stop('SIGTERM'); });
+
+  // Telegram bot — always use polling (Railway provides a persistent process).
+  // Do NOT await bot.launch() — the returned Promise resolves only on bot.stop(),
+  // so awaiting it would block all code below (schedulers, etc.) from ever running.
+  bot.launch();
   console.log('  bot:  polling started ✓');
 
   // Recurring scheduler — Friday 8am check-in
   startScheduler(bot);
 
   // Reminder delivery scheduler — polls every minute
+  console.log('[REMINDER] starting scheduler');
   startReminderScheduler(bot);
+  console.log('[REMINDER] scheduler started');
 
   // Daily 8AM ROI message (Mon-Sat)
   startDailyRoiScheduler(bot);
 
   console.log('=== startup complete ===\n');
-
-  process.once('SIGINT',  () => { console.log('Shutting down (SIGINT)…');  bot.stop('SIGINT');  });
-  process.once('SIGTERM', () => { console.log('Shutting down (SIGTERM)…'); bot.stop('SIGTERM'); });
 }
 
 main().catch((err) => {
