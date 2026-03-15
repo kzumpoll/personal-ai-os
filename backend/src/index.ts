@@ -210,6 +210,25 @@ async function main() {
     process.exit(1);
   }
 
+  // TELEGRAM_USER_CHAT_ID — critical for reminder creation and scheduled messages.
+  // Log raw value so we can see exactly what Railway is injecting (quote wrapping, etc.).
+  {
+    const raw = process.env.TELEGRAM_USER_CHAT_ID;
+    if (!raw) {
+      console.error('  chat_id: TELEGRAM_USER_CHAT_ID is NOT SET — reminders will fail');
+    } else {
+      const cleaned = raw.trim().replace(/^["']|["']$/g, '');
+      const parsed = parseInt(cleaned, 10);
+      if (isNaN(parsed)) {
+        console.error(`  chat_id: TELEGRAM_USER_CHAT_ID is SET but INVALID — raw="${raw}" cleaned="${cleaned}" parseInt=${parsed}`);
+        console.error('  chat_id: This is likely because the value was entered with surrounding quotes in Railway.');
+        console.error('  chat_id: Fix: set the Railway env var value to exactly the numeric ID, no quotes.');
+      } else {
+        console.log(`  chat_id: TELEGRAM_USER_CHAT_ID OK — raw="${raw}" → ${parsed}`);
+      }
+    }
+  }
+
   // Database
   const dbOk = await checkDb();
   if (!dbOk) {

@@ -38,6 +38,34 @@ export interface MutationResult {
   data?: unknown;
 }
 
+/**
+ * Parse TELEGRAM_USER_CHAT_ID robustly.
+ *
+ * Common failure modes when the env var IS set:
+ *  1. Value wrapped in quotes in Railway UI → e.g. `"1234567"` → parseInt returns NaN
+ *  2. Non-numeric suffix/prefix → parseInt returns NaN
+ *  3. The original check used `!chatId` which is truthy for NaN, 0, and null —
+ *     so NaN silently caused "Chat ID not configured" even when the var was present.
+ *
+ * This helper logs the raw value and parsed result so Railway logs show exactly what happened.
+ */
+function parseTelegramChatId(label: string): number | null {
+  const raw = process.env.TELEGRAM_USER_CHAT_ID;
+  if (!raw) {
+    console.error(`[executor/${label}] TELEGRAM_USER_CHAT_ID is not set`);
+    return null;
+  }
+  // Strip surrounding quotes (common Railway UI mistake: user types "12345" with quotes)
+  const cleaned = raw.trim().replace(/^["']|["']$/g, '');
+  const parsed = parseInt(cleaned, 10);
+  if (isNaN(parsed) || parsed === 0) {
+    console.error(`[executor/${label}] TELEGRAM_USER_CHAT_ID is set but invalid: raw="${raw}" cleaned="${cleaned}" parsed=${parsed}`);
+    return null;
+  }
+  console.log(`[executor/${label}] TELEGRAM_USER_CHAT_ID: raw="${raw}" → chatId=${parsed}`);
+  return parsed;
+}
+
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type TaskResolution =
@@ -841,8 +869,8 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
       const { title, body, scheduled_at, recipient_name, suggested_message, draft_message } = intent.data;
       const { createReminder } = await import('../db/queries/reminders');
       const { wallClockToUtc } = await import('../services/localdate');
-      const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
-      if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders.' };
+      const chatId = parseTelegramChatId('create_reminder');
+      if (!chatId) return { success: false, message: 'Chat ID not configured — cannot deliver reminders. Check TELEGRAM_USER_CHAT_ID in Railway.' };
       const effectiveDraft = draft_message ?? suggested_message ?? null;
       const userTz = process.env.USER_TZ ?? 'UTC';
       // wallClockToUtc strips any Z/offset the LLM may have appended, then
@@ -986,7 +1014,7 @@ export async function executeIntent(intent: Intent): Promise<MutationResult> {
           const { createReminder } = await import('../db/queries/reminders');
           const { wallClockToUtc } = await import('../services/localdate');
           const userTz = process.env.USER_TZ ?? 'UTC';
-          const chatId = process.env.TELEGRAM_USER_CHAT_ID ? parseInt(process.env.TELEGRAM_USER_CHAT_ID, 10) : null;
+          const chatId = parseTelegramChatId('calendar_create_event/reminder_also');
           if (chatId) {
             const scheduledUtc = wallClockToUtc(reminder_also.scheduled_at, userTz);
             await createReminder({
