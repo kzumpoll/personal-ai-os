@@ -30,7 +30,10 @@ export async function GET(req: NextRequest) {
          WHERE t.date >= $1 AND t.date <= $2
            AND t.is_income = false AND t.status = 'categorized'
          GROUP BY c.id, c.name, c.color
-         ORDER BY total_usd DESC`,
+         ORDER BY COALESCE(
+           SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)),
+           SUM(ABS(t.amount))
+         ) DESC`,
         [startDate, endDate]
       ),
       // Net flow (income vs expenses)
@@ -68,7 +71,10 @@ export async function GET(req: NextRequest) {
          WHERE t.date >= $1 AND t.date <= $2
            AND t.is_income = false AND t.status = 'categorized'
          GROUP BY month, c.name
-         ORDER BY month ASC, total_usd DESC`,
+         ORDER BY month ASC, COALESCE(
+           SUM(ABS(t.amount) / NULLIF(COALESCE(fx.rate_to_usd, CASE WHEN t.currency = 'USD' THEN 1 END), 0)),
+           SUM(ABS(t.amount))
+         ) DESC`,
         [startDate, endDate]
       ),
     ]);

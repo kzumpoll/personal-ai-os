@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { format, parseISO } from 'date-fns';
 import {
@@ -392,15 +392,9 @@ export default function FinancesView({
   const [inboxPage, setInboxPage]       = useState(1);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxSearch, setInboxSearch]   = useState('');
+  const searchDebounceRef               = useRef<ReturnType<typeof setTimeout> | null>(null);
   const PAGE_SIZE = 30;
   const inboxPages = Math.max(1, Math.ceil(inboxCount / PAGE_SIZE));
-  const inboxFiltered = inboxSearch.trim()
-    ? inboxItems.filter(tx => {
-        const q = inboxSearch.toLowerCase();
-        return tx.description.toLowerCase().includes(q) ||
-               (tx.merchant_raw ?? '').toLowerCase().includes(q);
-      })
-    : inboxItems;
 
   // ── LLM suggestions ──
   const [suggestions, setSuggestions]               = useState<Record<string, Suggestion>>({});
@@ -436,10 +430,22 @@ export default function FinancesView({
     }
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function fetchInboxPage(page: number) {
+  // Debounced server-side search: triggers on inboxSearch change (300ms delay)
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      fetchInboxPage(1, inboxSearch);
+    }, 300);
+    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
+  }, [inboxSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchInboxPage(page: number, search?: string) {
     setInboxLoading(true);
+    const q = search !== undefined ? search : inboxSearch;
+    const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+    if (q.trim()) params.set('search', q.trim());
     try {
-      const res = await fetch(`/api/finances/inbox?page=${page}&pageSize=${PAGE_SIZE}`);
+      const res = await fetch(`/api/finances/inbox?${params}`);
       if (res.ok) {
         const data = await res.json() as { transactions: Transaction[]; total: number };
         setInboxItems(data.transactions);
@@ -650,20 +656,20 @@ export default function FinancesView({
               type="text"
               value={inboxSearch}
               onChange={e => setInboxSearch(e.target.value)}
-              placeholder="Filter by merchant or description…"
+              placeholder="Search all inbox transactions…"
               className="text-xs px-3 py-1.5 rounded w-full"
               style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' }}
             />
           </div>
           {inboxLoading ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>Loading…</p>
-          ) : inboxFiltered.length === 0 ? (
+          ) : inboxItems.length === 0 ? (
             <p className="text-sm py-8 text-center" style={{ color: 'var(--text-faint)' }}>
-              {inboxCount === 0 ? 'All caught up — no uncategorized transactions.' : inboxSearch ? 'No matches.' : 'No items on this page.'}
+              {inboxSearch.trim() ? 'No matches.' : 'All caught up — no uncategorized transactions.'}
             </p>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {inboxFiltered.map(tx => (
+              {inboxItems.map(tx => (
                 <InboxRow
                   key={tx.id}
                   tx={tx}

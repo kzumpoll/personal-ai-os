@@ -8,6 +8,7 @@ import {
   interpretDebriefReply,
   confirmDebriefSummary,
   applyDebriefCorrection,
+  extractThoughtsFromJournal,
   interpretCheckinReply,
   formatCheckinSummary,
   generateWithinProposal,
@@ -740,6 +741,23 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         const result = await executeIntent(session.pendingIntent);
         await clearSession(chatId);
         await reply(result.message);
+
+        // Extract thoughts from the journal text and propose saving them
+        const journalText: string = session.pendingIntent.intent === 'save_debrief'
+          ? (session.pendingIntent.data.open_journal ?? '')
+          : '';
+        if (journalText.trim()) {
+          try {
+            const extractedThoughts = await extractThoughtsFromJournal(journalText);
+            if (extractedThoughts.length > 0) {
+              const thoughtLines = extractedThoughts.map((t, i) => `${i + 1}. ${t}`).join('\n');
+              await setSession(chatId, { state: 'debrief_thought_confirmation', pendingThoughts: extractedThoughts });
+              await reply(`💭 I noticed a few thoughts in your journal worth saving:\n\n${thoughtLines}\n\nReply "yes" to save all, "no" to skip, or list numbers to save specific ones (e.g. "1 3").`);
+            }
+          } catch (thoughtErr) {
+            console.warn('[bot] thought extraction failed (non-critical):', thoughtErr instanceof Error ? thoughtErr.message : thoughtErr);
+          }
+        }
       } catch (err) {
         await clearSession(chatId);
         const msg = err instanceof Error ? err.message : String(err);
@@ -789,6 +807,40 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
         await reply(`Updated:\n\n${newSummary}`);
       }
     }
+    return;
+  }
+
+  // --- Debrief: thought extraction confirmation ---
+  if (session.state === 'debrief_thought_confirmation') {
+    const { pendingThoughts } = session;
+    if (isNegative(lower) || lower === 'skip') {
+      await clearSession(chatId);
+      await reply('Got it, no thoughts saved.');
+      return;
+    }
+    // Determine which thoughts to save: "yes"/all, or specific numbers
+    const { createThought } = await import('../db/queries/thoughts');
+    let toSave: string[] = pendingThoughts;
+    if (lower !== 'yes' && lower !== 'y' && lower !== 'all') {
+      // Parse numbers from the reply (e.g. "1 3" or "1, 2")
+      const nums = [...lower.matchAll(/\d+/g)].map(m => parseInt(m[0], 10) - 1);
+      if (nums.length > 0) {
+        toSave = nums.flatMap(i => (i >= 0 && i < pendingThoughts.length ? [pendingThoughts[i]] : []));
+      }
+    }
+    await clearSession(chatId);
+    if (toSave.length === 0) {
+      await reply('No thoughts saved.');
+      return;
+    }
+    for (const content of toSave) {
+      try {
+        await createThought({ content });
+      } catch (e) {
+        console.error('[bot] thought save failed:', e instanceof Error ? e.message : e);
+      }
+    }
+    await reply(`✔ ${toSave.length} thought${toSave.length > 1 ? 's' : ''} saved.`);
     return;
   }
 
@@ -1102,6 +1154,23 @@ async function handleText(chatId: number, text: string, rawReply: (msg: string) 
       if (intent.capture_type === 'resource' && looksLikeEvent) {
         console.warn('[bot] BLOCKED resource capture for calendar-like content:', captureText);
         await reply('This looks like a calendar event. Try: "add ' + (intent.content?.slice(0, 40) ?? 'event') + ' to my calendar"');
+        return;
+      }
+      // For unambiguous types (thought, idea, win), save directly without confirmation
+      const DIRECT_TYPES: string[] = ['thought', 'idea', 'win'];
+      if (DIRECT_TYPES.includes(intent.capture_type)) {
+        const captureIntent = captureToIntent(intent.capture_type, intent.content);
+        console.log('[bot] capture direct save:', intent.capture_type);
+        try {
+          const result = await executeIntent(captureIntent);
+          const typeLabel = intent.capture_type.charAt(0).toUpperCase() + intent.capture_type.slice(1);
+          const preview = intent.content.length > 60 ? intent.content.slice(0, 60) + '…' : intent.content;
+          await reply(`✔ ${typeLabel} saved: ${preview}`);
+          if (!result.success) console.warn('[bot] capture direct save returned failure:', result.message);
+        } catch (e) {
+          console.error('[bot] capture direct save threw:', e instanceof Error ? e.message : e);
+          await reply("Couldn't save that — please try again.");
+        }
         return;
       }
       await setSession(chatId, {

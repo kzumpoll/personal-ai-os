@@ -5,12 +5,12 @@ import { format, addDays, subDays } from 'date-fns';
 
 interface Props {
   currentDate: string; // YYYY-MM-DD
+  today: string;       // YYYY-MM-DD — server-computed local today (USER_TZ)
 }
 
-export default function DayNav({ currentDate }: Props) {
+export default function DayNav({ currentDate, today }: Props) {
   const router = useRouter();
   const d = new Date(currentDate + 'T12:00:00');
-  const today = format(new Date(), 'yyyy-MM-dd');
   const isToday = currentDate === today;
 
   const go = (date: string) => {

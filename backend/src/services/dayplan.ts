@@ -218,28 +218,44 @@ export function generateDayPlan(params: {
     gaps.push({ start: gapCursor, end: workEndMin });
   }
 
-  // Place tasks into gaps chronologically, skipping gaps < 15 min
+  // Place tasks into gaps chronologically, skipping gaps < 15 min.
+  // If a task doesn't fit whole, split it across gaps in ≥30 min chunks.
+  const MIN_SPLIT = 30;
   let gapIdx = 0;
   let gapPos = gaps.length > 0 ? gaps[0].start : workEndMin;
   for (const slot of taskSlots) {
-    let placed = false;
-    while (gapIdx < gaps.length) {
+    let remaining = slot.duration_min;
+    let partNum = 0;
+    while (remaining > 0 && gapIdx < gaps.length) {
       const gap = gaps[gapIdx];
       const available = gap.end - gapPos;
-      if (available < 15) { gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin; continue; }
-      if (slot.duration_min <= available) {
-        schedule.push({ time: toHHMM(gapPos), title: slot.title, type: slot.type, duration_min: slot.duration_min });
-        occupied.push({ start: gapPos, end: gapPos + slot.duration_min, title: slot.title });
-        gapPos += slot.duration_min + 10; // 10-min buffer between tasks
-        if (gapPos >= gap.end) { gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin; }
-        placed = true;
-        break;
+      if (available < 15) {
+        gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin;
+        continue;
       }
-      // Task doesn't fit in this gap — try next gap
-      gapIdx++;
-      gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin;
+      if (remaining <= available) {
+        // Fits whole in this gap
+        const label = partNum > 0 ? `${slot.title} (cont.)` : slot.title;
+        schedule.push({ time: toHHMM(gapPos), title: label, type: slot.type, duration_min: remaining });
+        occupied.push({ start: gapPos, end: gapPos + remaining, title: slot.title });
+        gapPos += remaining + 10;
+        if (gapPos >= gap.end) { gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin; }
+        remaining = 0;
+      } else if (available >= MIN_SPLIT) {
+        // Split: place as much as fits (leaving no remainder < MIN_SPLIT if possible)
+        const chunk = Math.min(available, remaining);
+        const label = partNum > 0 ? `${slot.title} (cont.)` : slot.title;
+        schedule.push({ time: toHHMM(gapPos), title: label, type: slot.type, duration_min: chunk });
+        occupied.push({ start: gapPos, end: gapPos + chunk, title: slot.title });
+        remaining -= chunk;
+        partNum++;
+        gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin;
+      } else {
+        // Gap too small to bother splitting — try next gap
+        gapIdx++; gapPos = gapIdx < gaps.length ? gaps[gapIdx].start : workEndMin;
+      }
     }
-    if (!placed) overflow.push(slot.title);
+    if (remaining > 0) overflow.push(remaining < slot.duration_min ? `${slot.title} (+${remaining}min)` : slot.title);
   }
 
   // Sort schedule by time (wake block first, then chronological)

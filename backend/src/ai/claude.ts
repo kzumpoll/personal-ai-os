@@ -1512,3 +1512,48 @@ export function formatWithinProposal(
   lines.push('Reply "yes" to execute, "no" to cancel, or correct by number (e.g. "1 move to Friday", "3 skip", "2 remove").');
   return lines.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Debrief thought extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Given a freeform journal entry from a debrief, extract standalone thoughts
+ * worth saving to the Thoughts system. Returns 0–4 candidates.
+ */
+export async function extractThoughtsFromJournal(journalText: string): Promise<string[]> {
+  if (!journalText?.trim()) return [];
+  const response = await client.messages.create({
+    model: 'claude-opus-4-6',
+    max_tokens: 512,
+    messages: [
+      {
+        role: 'user',
+        content: `You are extracting standalone thoughts from a freeform daily journal entry.
+
+Journal text:
+"""
+${journalText}
+"""
+
+Extract up to 4 standalone thoughts that are:
+- Self-contained observations, realisations, or insights (not tasks or plans)
+- Stated in the first person, complete sentences
+- Meaningfully different from each other
+
+If the text contains no reusable thoughts (just logistics, lists, task notes), return an empty array.
+
+Respond with ONLY a JSON array of strings, e.g.:
+["Thought one.", "Thought two."]
+
+No explanations, no commentary.`,
+      },
+    ],
+  });
+  const raw = response.content[0]?.type === 'text' ? response.content[0].text : '';
+  try {
+    const parsed = JSON.parse(raw.trim());
+    if (Array.isArray(parsed)) return parsed.filter((t): t is string => typeof t === 'string' && t.trim().length > 5);
+  } catch { /* ignore */ }
+  return [];
+}

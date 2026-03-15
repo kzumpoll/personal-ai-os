@@ -212,6 +212,11 @@ export type SessionState =
         intent: Intent;
         result: { success: boolean; message: string; data?: unknown };
       };
+    }
+  | {
+      // After debrief save: propose extracted thoughts from journal, waiting for yes/no/numbers
+      state: 'debrief_thought_confirmation';
+      pendingThoughts: string[];
     };
 
 // ---------------------------------------------------------------------------

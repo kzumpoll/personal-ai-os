@@ -5,6 +5,7 @@ import { getLocalToday } from '@/lib/date';
 import TaskCard from '@/components/TaskCard';
 import PageHeader from '@/components/PageHeader';
 import DayNav from '@/components/DayNav';
+import FocusBlock from '@/components/FocusBlock';
 
 /** Returns current quarter string like "Q1 2026" for a given YYYY-MM-DD date. */
 function getCurrentQuarter(dateStr: string): string {
@@ -181,77 +182,18 @@ export default async function TodayPage({ searchParams }: { searchParams: { date
           subtitle={dateLabel}
         />
         <div className="mt-1 shrink-0">
-          <DayNav currentDate={todayStr} />
+          <DayNav currentDate={todayStr} today={realToday} />
         </div>
       </div>
 
-      {/* Focus block — MIT / K1 / K2 */}
+      {/* Focus block — MIT / P1 / P2 (interactive checkoff) */}
       {journal ? (
-        <section
-          className="mb-8 rounded-lg p-5"
-          style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderLeft: '3px solid var(--cyan)',
-          }}
-        >
-          <SectionLabel color="var(--cyan)">Focus</SectionLabel>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-            {journal.mit && (
-              <div>
-                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--cyan)', marginBottom: 6 }}>
-                  MIT {dayPlan?.mit_done && '✅'}
-                </p>
-                <p className="text-sm font-medium" style={{ color: dayPlan?.mit_done ? 'var(--text-muted)' : 'var(--text)', textDecoration: dayPlan?.mit_done ? 'line-through' : 'none' }}>
-                  {journal.mit}
-                </p>
-                {dayPlan?.mit_start_action && !dayPlan.mit_done && (
-                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
-                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.mit_start_action}</span>
-                  </p>
-                )}
-              </div>
-            )}
-            {journal.p1 && (
-              <div>
-                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--blue)', marginBottom: 6 }}>
-                  P1 {dayPlan?.p1_done && '✅'}
-                </p>
-                <p className="text-sm" style={{ color: dayPlan?.p1_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.p1_done ? 'line-through' : 'none' }}>
-                  {journal.p1}
-                </p>
-                {dayPlan?.p1_start_action && !dayPlan.p1_done && (
-                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
-                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.p1_start_action}</span>
-                  </p>
-                )}
-              </div>
-            )}
-            {journal.p2 && (
-              <div>
-                <p style={{ fontFamily: "var(--font-mono)", fontSize: '9px', letterSpacing: '0.14em', color: 'var(--violet)', marginBottom: 6 }}>
-                  P2 {dayPlan?.p2_done && '✅'}
-                </p>
-                <p className="text-sm" style={{ color: dayPlan?.p2_done ? 'var(--text-muted)' : 'var(--text-dim)', textDecoration: dayPlan?.p2_done ? 'line-through' : 'none' }}>
-                  {journal.p2}
-                </p>
-                {dayPlan?.p2_start_action && !dayPlan.p2_done && (
-                  <p className="text-xs mt-2" style={{ color: 'var(--text-faint)' }}>
-                    Start: <span style={{ color: 'var(--text-muted)' }}>{dayPlan.p2_start_action}</span>
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-          {journal.open_journal && (
-            <p
-              className="mt-4 text-sm pt-4"
-              style={{ borderTop: '1px solid var(--border)', color: 'var(--text-muted)' }}
-            >
-              {journal.open_journal}
-            </p>
-          )}
-        </section>
+        <FocusBlock
+          journal={journal}
+          dayPlan={dayPlan}
+          todayStr={todayStr}
+          isToday={isToday}
+        />
       ) : (
         <div
           className="mb-8 rounded-lg p-5"

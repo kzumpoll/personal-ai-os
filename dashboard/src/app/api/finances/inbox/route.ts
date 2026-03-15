@@ -5,12 +5,23 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const page     = Math.max(1, parseInt(searchParams.get('page')     ?? '1'));
   const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') ?? '30')));
+  const search   = (searchParams.get('search') ?? '').trim();
   const offset   = (page - 1) * pageSize;
+
+  // When searching: $1 = pattern, $2 = pageSize, $3 = offset
+  // When not:       $1 = pageSize, $2 = offset
+  const searchClause = search ? `AND (t.description ILIKE $1 OR COALESCE(t.merchant_raw,'') ILIKE $1)` : '';
+  const limitIdx     = search ? 2 : 1;
+  const offsetIdx    = search ? 3 : 2;
+  const baseParams   = search ? [`%${search}%`] : [];
 
   try {
     const [countRes, rowsRes] = await Promise.all([
       pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM finance_transactions WHERE status = 'uncategorized'`
+        `SELECT COUNT(*)::text AS count
+         FROM finance_transactions t
+         WHERE t.status = 'uncategorized' ${searchClause}`,
+        baseParams
       ),
       pool.query(
         `SELECT t.id,
@@ -28,10 +39,10 @@ export async function GET(req: NextRequest) {
                 c.name                AS category_name
          FROM finance_transactions t
          LEFT JOIN finance_categories c ON t.category_id = c.id
-         WHERE t.status = 'uncategorized'
+         WHERE t.status = 'uncategorized' ${searchClause}
          ORDER BY t.date DESC
-         LIMIT $1 OFFSET $2`,
-        [pageSize, offset]
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...baseParams, pageSize, offset]
       ),
     ]);
 

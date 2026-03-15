@@ -72,6 +72,12 @@ async function deliverReminders(bot: Telegraf): Promise<void> {
 }
 
 export function startReminderScheduler(bot: Telegraf): void {
+  // Warn loudly at startup if TELEGRAM_USER_CHAT_ID is missing — reminders cannot be created without it
+  if (!process.env.TELEGRAM_USER_CHAT_ID) {
+    console.error('[reminderScheduler] FATAL: TELEGRAM_USER_CHAT_ID env var is not set — reminder creation will fail. Set this to your Telegram user chat ID on Railway.');
+  } else {
+    console.log('[reminderScheduler] TELEGRAM_USER_CHAT_ID is configured:', process.env.TELEGRAM_USER_CHAT_ID);
+  }
   // Poll every minute
   cron.schedule('* * * * *', () => deliverReminders(bot));
   console.log('[reminderScheduler] started — polling every 60s');
