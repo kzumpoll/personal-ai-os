@@ -3,9 +3,11 @@
  *
  * Polls pending reminders every 60 seconds and delivers them via Telegram.
  * Survives restarts because it reads from the database, not in-memory timers.
+ *
+ * Uses setInterval (not node-cron) for maximum reliability — no library
+ * dependency, no cron expression parsing, fires unconditionally every 60s.
  */
 
-import cron from 'node-cron';
 import { Telegraf, Markup } from 'telegraf';
 import {
   getDueReminders,
@@ -67,7 +69,15 @@ async function deliverReminders(bot: Telegraf): Promise<void> {
         await markReminderSent(reminder.id);
         console.log(`[REMINDER] marked sent: ${reminder.id} "${reminder.title}"`);
       } catch (err) {
-        console.error(`[REMINDER] failed to send ${reminder.id} "${reminder.title}":`, err instanceof Error ? err.message : err);
+        // Log both the message and the raw Telegram API response body so the
+        // actual rejection reason (e.g. "chat not found", "bot was blocked") is visible.
+        const msg = err instanceof Error ? err.message : String(err);
+        const tgBody = (err as Record<string, unknown>)?.response;
+        console.error(
+          `[REMINDER] failed to send ${reminder.id} "${reminder.title}" to chat_id=${reminder.chat_id}:`,
+          msg,
+          tgBody ? JSON.stringify(tgBody) : ''
+        );
       }
     }
   } catch (err) {
@@ -82,7 +92,14 @@ export function startReminderScheduler(bot: Telegraf): void {
   } else {
     console.log('[reminderScheduler] TELEGRAM_USER_CHAT_ID is configured:', process.env.TELEGRAM_USER_CHAT_ID);
   }
-  // Poll every minute
-  cron.schedule('* * * * *', () => deliverReminders(bot));
-  console.log('[reminderScheduler] started — polling every 60s');
+
+  // Fire immediately on startup so any overdue pending reminders (e.g. created
+  // before the last deploy) are delivered without waiting 60 seconds.
+  console.log('[REMINDER] startup: running immediate delivery check');
+  void deliverReminders(bot);
+
+  // Poll every 60 seconds via setInterval — built-in to Node, no cron library
+  // dependency, unconditionally fires regardless of timezone or cron parsing.
+  setInterval(() => { void deliverReminders(bot); }, 60_000);
+  console.log('[reminderScheduler] started — polling every 60s (setInterval)');
 }
